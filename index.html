@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dodge The Fruit Salad</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="game-wrap">
+    <canvas id="game" width="800" height="450"></canvas>
+
+    <div id="start-screen" class="overlay">
+      <h1>Dodge The Fruit Salad</h1>
+      <p>You're a banana! Run to the portal before time runs out, then fly the fruit bowl to the next level.</p>
+      <ul>
+        <li><b>Jump:</b> Space / ↑ / W &nbsp;·&nbsp; <b>Duck:</b> ↓ / S &nbsp;·&nbsp; <b>Run faster:</b> → / D &nbsp;·&nbsp; <b>Sound:</b> M &nbsp;·&nbsp; <b>Music:</b> N</li>
+        <li>Blueberries and knives get you straight away. Raspberries drain your energy.</li>
+        <li>Splash through puddles and grab sunshine for energy. Jump on the cutting boards to go higher.</li>
+        <li>On a phone: tap the right side to jump, hold the left side to duck</li>
+      </ul>
+      <p class="small">Best level: <b id="best">1</b></p>
+      <button id="start-btn">Play</button>
+      <p class="credit">by Eloise Catherin</p>
+    </div>
+
+    <div id="gameover-screen" class="overlay hidden">
+      <h2 id="go-title">Squished!</h2>
+      <p id="go-msg"></p>
+      <div class="buttons">
+        <button id="retry-btn">Try again</button>
+        <button id="menu-btn" class="secondary">Menu</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
