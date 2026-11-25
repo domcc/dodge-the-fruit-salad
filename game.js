@@ -884,6 +884,7 @@ function updateDying() {
       d.y += d.vy;
       d.rot += d.vr;
       if (d.y > GROUND_Y - 5) { d.y = GROUND_Y - 5; d.vy *= -0.35; d.vx *= 0.7; d.vr *= 0.6; }
+      if (d.x < 15 || d.x > W - 15) { d.x = clamp(d.x, 15, W - 15); d.vx *= -0.6; }
     }
     if (L.deathT >= DICE_TIME) showGameOver();
   }
