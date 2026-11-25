@@ -11,10 +11,14 @@ Open `index.html` in a browser. No install or server needed.
 - Knives dice you into banana slices
 - Raspberries drain your energy (3 hits from full and you're out)
 - Splash through puddles or grab a sunshine for a bit of energy back
+- Every 5th sun/puddle: a big energy boost if you've lost some, or a ❤️ if you're full. Each ❤️ saves you from one death (not from running out of time). Hearts carry over between levels (up to 3).
 - Jump onto the cutting boards to get higher (there are often knives underneath)
 - Some fruit floats at head height: duck under it
 - Reach the portal before the timer runs out, then fly the fruit-bowl spaceship past the blueberries
 - If you die in the spaceship, "Try again" restarts the flight, not the whole level
+
+## Levels
+100 levels that slowly get faster and busier. Beat level 100 to win. "Continue" on the title screen starts from your best level.
 
 ## Controls
 - Jump / fly up: Space / ↑ / W
@@ -29,5 +33,5 @@ Open `index.html` in a browser. No install or server needed.
 - `style.css`: look and feel
 - `game.js`: the game. The easy things to tweak are at the top:
   - `SETTINGS`: jump height, energy, raspberry damage, spaceship handling
-  - `levelConfig(n)`: how each running level gets harder
+  - `MAX_LEVEL` (100) and `levelConfig(n)`: how each running level gets harder
   - `flightConfig(n)`: how each spaceship flight gets harder

@@ -8,6 +8,10 @@ const SETTINGS = {
   maxEnergy: 100,
   raspberryDamage: 35,  // 3 raspberries from full = blender time
   pickupEnergy: 15,     // energy from a puddle or a sunshine
+  bonusEvery: 5,        // every 5th sun/puddle gives a bonus...
+  bonusEnergy: 35,      // ...this much energy if you've lost some
+  maxHearts: 3,         // ...or a heart if you're full (each heart saves you once)
+  shieldFrames: 100,    // how long you're safe after a heart saves you
   jumpPower: 14.5,      // bigger = higher jumps
   gravity: 0.8,
   sprintBoost: 1.4,     // speed multiplier while holding → / D
@@ -18,34 +22,38 @@ const SETTINGS = {
   shipFall: 0.5,        // spaceship: how fast it sinks when you let go
 };
 
-// How each running level is built. n = level number (1, 2, 3...)
+const MAX_LEVEL = 100;
+
+// Grows from 0 at level 1 towards 1 by the later levels.
+// Smaller k = gets hard sooner, bigger k = more gradual.
+const ramp = (n, k) => 1 - Math.exp(-(n - 1) / k);
+
+// How each running level is built. n = level number (1 to 100)
 function levelConfig(n) {
-  const i = n - 1;
-  const speed = Math.min(5 + i * 0.7, 11);
-  const length = 5000 + i * 1500;                // distance to the portal
-  const margin = Math.max(1.3 - i * 0.05, 1.08); // spare time (1.3 = 30% extra)
+  const speed = 5 + 6 * ramp(n, 18);                // 5 at level 1, ~8 at 15, ~11 by 70+
+  const length = 5000 + Math.min(n - 1, 20) * 600;  // distance to the portal (stops growing at level 21)
+  const margin = 1.3 - 0.2 * ramp(n, 15);           // spare time: 30% early on, 10% later
   return {
     speed,
     length,
-    blueChance: Math.min(0.25 + i * 0.1, 0.7),    // chance a fruit is a blueberry
-    floatChance: Math.min(0.15 + i * 0.08, 0.45), // chance fruit floats (duck under!)
-    groupChance: n === 1 ? 0 : Math.min(i * 0.12, 0.45), // 2-3 in a row
-    platformChance: Math.min(0.15 + i * 0.04, 0.3),
-    knifeChance: n === 1 ? 0.08 : Math.min(0.1 + i * 0.04, 0.25),
-    pickupChance: 0.3,                             // puddle or sunshine in a gap
-    gapVariety: Math.max(1.0 - i * 0.12, 0.3),    // smaller = packed tighter
+    blueChance: 0.25 + 0.45 * ramp(n, 15),          // chance a fruit is a blueberry
+    floatChance: 0.15 + 0.3 * ramp(n, 15),          // chance fruit floats (duck under!)
+    groupChance: n === 1 ? 0 : 0.45 * ramp(n, 10),  // 2-3 in a row
+    platformChance: 0.15 + 0.15 * ramp(n, 15),
+    knifeChance: n === 1 ? 0.08 : 0.1 + 0.15 * ramp(n, 15),
+    pickupChance: 0.3,                              // puddle or sunshine in a gap
+    gapVariety: 1 - 0.7 * ramp(n, 12),              // smaller = packed tighter
     timeLimit: Math.ceil((length / (speed * 60)) * margin),
   };
 }
 
 // How each spaceship flight is built
 function flightConfig(n) {
-  const i = n - 1;
   return {
-    speed: Math.min(5 + i * 0.4, 9),
-    length: 2400 + i * 300,
-    gateChance: n === 1 ? 0.25 : Math.min(0.35 + i * 0.1, 0.85), // walls of blueberries
-    gap: Math.max(170 - i * 8, 125),                              // hole in the wall
+    speed: 5 + 4 * ramp(n, 20),
+    length: 2400 + Math.min(n - 1, 15) * 200,
+    gateChance: n === 1 ? 0.25 : 0.35 + 0.5 * ramp(n, 12), // walls of blueberries
+    gap: 170 - 45 * ramp(n, 15),                           // hole in the wall
   };
 }
 
@@ -76,10 +84,18 @@ const gameOverScreen = document.getElementById("gameover-screen");
 const goTitle = document.getElementById("go-title");
 const goMsg = document.getElementById("go-msg");
 const bestEl = document.getElementById("best");
+const retryBtn = document.getElementById("retry-btn");
+const continueBtn = document.getElementById("continue-btn");
 
 let bestLevel = 1;
 try { bestLevel = Number(localStorage.getItem("dtfs-best-level")) || 1; } catch (e) {}
+bestLevel = Math.min(bestLevel, MAX_LEVEL);
 bestEl.textContent = bestLevel;
+function updateContinueButton() {
+  continueBtn.classList.toggle("hidden", bestLevel <= 1);
+  continueBtn.textContent = `Continue from level ${bestLevel}`;
+}
+updateContinueButton();
 
 // ================= SOUND (made with code, no files needed) =================
 const Sound = {
@@ -188,6 +204,14 @@ const Sound = {
   ding() {
     if (!this.ready()) return;
     this.tone(880, 880, 0, 0.5, "sine", 0.12);
+  },
+  bonus() {
+    if (!this.ready()) return;
+    [1047, 1319, 1568, 2093].forEach((f, i) => this.tone(f, f, 0.15 + i * 0.06, 0.3, "sine", 0.12));
+  },
+  save() {
+    if (!this.ready()) return;
+    [784, 988, 1175, 1568].forEach((f, i) => this.tone(f, f, i * 0.05, 0.35, "triangle", 0.12));
   },
   portal() {
     if (!this.ready()) return;
@@ -461,6 +485,8 @@ const wantSprint = () => anyKey("arrowright", "d");
 let mode = "title";
 let L = null; // everything about the current level
 let titleScroll = 0;
+// Things you collect that carry over from level to level
+let run = { suns: 0, waters: 0, hearts: 0 };
 
 function startLevel(n) {
   const cfg = levelConfig(n);
@@ -479,6 +505,9 @@ function startLevel(n) {
     player: { y: GROUND_Y, vy: 0, onGround: true, ducking: false, angle: 0 },
     ...world,
     particles: [],
+    texts: [],
+    shield: 0,
+    startRun: { ...run },
     cutT: 0,
     secondsLeft: 0,
   };
@@ -495,6 +524,9 @@ function startShip() {
   L.flight = flightConfig(L.n);
   L.shipObs = generateFlight(L.flight);
   L.particles = [];
+  L.texts = [];
+  L.shield = 0;
+  L.shipRun = { ...run };
   mode = "flying";
 }
 
@@ -502,19 +534,21 @@ function hideOverlays() {
   startScreen.classList.add("hidden");
   gameOverScreen.classList.add("hidden");
 }
-function startGame() { hideOverlays(); startLevel(1); }
+function startGame() { hideOverlays(); run = { suns: 0, waters: 0, hearts: 0 }; startLevel(1); }
+function continueGame() { hideOverlays(); run = { suns: 0, waters: 0, hearts: 0 }; startLevel(bestLevel); }
 // Try again from where you died (running part, or the spaceship part)
 function retry() {
   hideOverlays();
-  if (!L) return startLevel(1);
-  if (L.phase === "flight") { startShip(); L.energy = SETTINGS.maxEnergy; }
-  else startLevel(L.n);
+  if (!L || L.won) return startGame();
+  if (L.phase === "flight") { run = { ...L.shipRun }; startShip(); L.energy = SETTINGS.maxEnergy; }
+  else { run = { ...L.startRun }; startLevel(L.n); }
 }
 function backToMenu() {
   hideOverlays();
   L = null;
   mode = "title";
   bestEl.textContent = bestLevel;
+  updateContinueButton();
   startScreen.classList.remove("hidden");
 }
 
@@ -611,10 +645,28 @@ function boxesTouch(a, b) {
 }
 const knifeBox = (sx) => ({ x: sx - 5, y: GROUND_Y - 54, w: 10, h: 54 });
 
-function gainEnergy(x, y) {
+function floatText(text, x, y, color = "white") {
+  L.texts.push({ text, x, y, color, life: 70 });
+}
+
+function gainEnergy(kind, x, y) {
+  run[kind]++;
   L.energy = Math.min(SETTINGS.maxEnergy, L.energy + SETTINGS.pickupEnergy);
   Sound.ring();
   splat(x, y, "#fff3a0", 10, 3);
+  // Every 5th sun or puddle: a bonus
+  if ((run.suns + run.waters) % SETTINGS.bonusEvery === 0) {
+    if (L.energy < SETTINGS.maxEnergy) {
+      L.energy = Math.min(SETTINGS.maxEnergy, L.energy + SETTINGS.bonusEnergy);
+      floatText("Energy boost!", PLAYER_X + 40, L.player.y - 70, "#52d273");
+    } else if (run.hearts < SETTINGS.maxHearts) {
+      run.hearts++;
+      floatText("+1 ❤️", PLAYER_X + 40, L.player.y - 70, "#ff8fab");
+    } else {
+      floatText("Super banana!", PLAYER_X + 40, L.player.y - 70, "#ffd93b");
+    }
+    Sound.bonus();
+  }
 }
 
 function updatePlaying() {
@@ -659,9 +711,12 @@ function updatePlaying() {
   }
 
   const box = playerBox(p);
+  if (L.shield > 0) L.shield--;
+  const safe = L.shield > 0;
 
   // Knives dice you up
   for (const k of L.knives) {
+    if (safe) break;
     const sx = k.x - L.distance + PLAYER_X;
     if (Math.abs(sx - PLAYER_X) > 60) continue;
     if (boxesTouch(box, knifeBox(sx))) return die("knife");
@@ -669,6 +724,7 @@ function updatePlaying() {
 
   // Fruit
   for (const o of L.fruits) {
+    if (safe) break;
     if (o.hit) continue;
     const sx = o.x - L.distance + PLAYER_X;
     if (Math.abs(sx - PLAYER_X) > 80) continue;
@@ -697,10 +753,10 @@ function updatePlaying() {
     if (Math.abs(sx - PLAYER_X) > 70) continue;
     if (pk.kind === "sun" && circleHitsBox(sx, pk.y, 18, box)) {
       pk.taken = true;
-      gainEnergy(sx, pk.y);
+      gainEnergy("suns", sx, pk.y);
     } else if (pk.kind === "puddle" && p.y >= GROUND_Y - 2 && Math.abs(sx - PLAYER_X) < 45) {
       pk.taken = true;
-      gainEnergy(sx, GROUND_Y - 5);
+      gainEnergy("waters", sx, GROUND_Y - 5);
       splat(sx, GROUND_Y - 5, "#5ab4ff", 12, 4);
     }
   }
@@ -740,7 +796,9 @@ function updateFlying() {
   }
 
   const box = { x: SHIP_X - 30, y: s.y - 18, w: 60, h: 32 };
+  if (L.shield > 0) L.shield--;
   for (const o of L.shipObs) {
+    if (L.shield > 0) break;
     if (o.hit) continue;
     const sx = o.x - L.shipDist + SHIP_X;
     if (Math.abs(sx - SHIP_X) > 70) continue;
@@ -755,7 +813,7 @@ function updateFlying() {
     mode = "warp";
     L.warpT = 0;
     Sound.portal();
-    const next = L.n + 1;
+    const next = Math.min(L.n + 1, MAX_LEVEL);
     if (next > bestLevel) {
       bestLevel = next;
       try { localStorage.setItem("dtfs-best-level", bestLevel); } catch (e) {}
@@ -765,11 +823,26 @@ function updateFlying() {
 
 function updateWarp() {
   L.warpT++;
-  if (L.warpT >= 150) startLevel(L.n + 1);
+  if (L.warpT >= 150) {
+    if (L.n >= MAX_LEVEL) return showWin();
+    startLevel(L.n + 1);
+  }
 }
 
 // ---------- Dying ----------
 function die(reason) {
+  // A heart saves you once (but not from running out of time)
+  if (reason !== "time" && run.hearts > 0) {
+    run.hearts--;
+    L.shield = SETTINGS.shieldFrames;
+    if (L.energy <= 0) L.energy = SETTINGS.raspberryDamage;
+    const y = L.phase === "flight" ? L.ship.y : L.player.y - 25;
+    const x = L.phase === "flight" ? SHIP_X : PLAYER_X;
+    floatText("Saved by a ❤️!", x + 60, y - 50, "#ff8fab");
+    splat(x, y, "#ff8fab", 18, 4);
+    Sound.save();
+    return;
+  }
   L.deathReason = reason;
   L.deathT = 0;
   L.deathStyle = reason === "knife" ? "dice" : "blender";
@@ -788,7 +861,7 @@ function die(reason) {
         vx: (Math.random() - 0.5) * 8,
         vy: -3 - Math.random() * 6,
         rot: Math.random() * 6,
-        vr: (Math.random() - 0.5) * 0.4,
+        vr: i === 0 ? 0 : (Math.random() - 0.5) * 0.4,
       });
     }
   } else {
@@ -816,8 +889,18 @@ function updateDying() {
   }
 }
 
+function showWin() {
+  mode = "over";
+  L.won = true;
+  goTitle.textContent = "You beat all 100 levels!";
+  goMsg.textContent = `Banana champion! You collected ${run.suns} suns and ${run.waters} puddles.`;
+  retryBtn.textContent = "Play again";
+  gameOverScreen.classList.remove("hidden");
+}
+
 function showGameOver() {
   mode = "over";
+  retryBtn.textContent = "Try again";
   const msgs = {
     blue: ["Blended!", "A blueberry got you. You're a banana milkshake now."],
     rasp: ["Blended!", "Too many raspberries. Banana milkshake time."],
@@ -850,6 +933,8 @@ function updateParticles() {
     pt.life--;
   }
   L.particles = L.particles.filter((pt) => pt.life > 0);
+  for (const tx of L.texts) { tx.y -= 0.6; tx.life--; }
+  L.texts = L.texts.filter((tx) => tx.life > 0);
 }
 
 function update() {
@@ -923,28 +1008,120 @@ function drawBackground(dist, pal) {
   for (let x = -(dist % 40); x < W; x += 40) ctx.fillRect(x, GROUND_Y + 26, 18, 8);
 }
 
+// The banana kid. s = { angle, scale, ducking, face, phase, air }
+// face: "happy" | "scared" | "sad"
 function drawBanana(x, bottomY, s, alpha = 1) {
-  const h = s.ducking ? DUCK.h : STAND.h;
   const scale = s.scale ?? 1;
+  const squash = s.ducking ? 0.55 : 1;
   ctx.save();
-  ctx.globalAlpha = alpha;
-  ctx.translate(x, bottomY - h / 2);
+  ctx.globalAlpha *= alpha;
+  ctx.translate(x, bottomY - 31 * scale * squash);
   ctx.rotate(s.angle || 0);
-  ctx.scale(scale * (s.ducking ? 1.25 : 1), scale * (s.ducking ? 0.5 : 1));
-  ctx.font = `52px ${EMOJI_FONT}`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  // dark outline so the banana pops on any background
-  ctx.shadowColor = "rgba(40,20,0,0.9)";
-  ctx.shadowBlur = 0;
-  for (const [ox, oy] of [[2, 0], [-2, 0], [0, 2], [0, -2]]) {
-    ctx.shadowOffsetX = ox;
-    ctx.shadowOffsetY = oy;
-    ctx.fillText("🍌", 0, 2);
-  }
-  ctx.shadowColor = "transparent";
-  ctx.fillText("🍌", 0, 2);
+  ctx.scale(scale * (s.ducking ? 1.2 : 1), scale * squash);
+  drawBananaKid(s);
   ctx.restore();
+}
+
+function drawBananaKid(s) {
+  const air = !!s.air;
+  const swing = air ? 0 : Math.sin(s.phase ?? 0);
+  ctx.lineCap = "round";
+
+  // Legs with red sneakers
+  ctx.strokeStyle = "#5c3b12";
+  ctx.lineWidth = 3.5;
+  const legs = air ? [[-7, 0.5], [2, -0.4]] : [[-7, swing * 0.6], [2, -swing * 0.6]];
+  for (const [lx, a] of legs) {
+    ctx.save();
+    ctx.translate(lx, 18);
+    ctx.rotate(a);
+    const len = air ? 8 : 10;
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, len); ctx.stroke();
+    ctx.fillStyle = "#e63946";
+    ctx.beginPath(); ctx.ellipse(2.5, len + 1, 4.5, 2.6, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
+  // Arms with white gloves (up in the air when jumping)
+  ctx.lineWidth = 3;
+  const arms = air ? [[-14, 2.6], [8, -2.6]] : [[-14, 0.3 + swing * 0.5], [8, -0.3 + swing * 0.5]];
+  for (const [ax, a] of arms) {
+    ctx.save();
+    ctx.translate(ax, 2);
+    ctx.rotate(a);
+    ctx.strokeStyle = "#5c3b12";
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, 11); ctx.stroke();
+    ctx.fillStyle = "white";
+    ctx.strokeStyle = "#555";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(0, 13, 3.2, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.lineWidth = 3;
+    ctx.restore();
+  }
+
+  // Banana body
+  const g = ctx.createLinearGradient(-16, 0, 10, 0);
+  g.addColorStop(0, "#f4b400");
+  g.addColorStop(0.5, "#ffe14d");
+  g.addColorStop(1, "#f2c200");
+  ctx.fillStyle = g;
+  ctx.strokeStyle = "#7a4f00";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(4, -24);
+  ctx.quadraticCurveTo(-34, 0, 4, 22);
+  ctx.quadraticCurveTo(-2, 0, 10, -22);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  // stem and tip
+  ctx.fillStyle = "#6b4a1a";
+  ctx.beginPath();
+  ctx.moveTo(4, -23); ctx.lineTo(10, -21); ctx.lineTo(12, -29); ctx.lineTo(7, -30);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath(); ctx.arc(4, 21, 2.2, 0, Math.PI * 2); ctx.fill();
+  // shine
+  ctx.strokeStyle = "rgba(255,255,255,0.55)";
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(-10, -12); ctx.quadraticCurveTo(-15, 0, -10, 10); ctx.stroke();
+
+  drawFace(-6, -4, s.face || "happy");
+}
+
+// A face centred at (cx, cy). mood: "happy" | "scared" | "sad"
+function drawFace(cx, cy, mood) {
+  ctx.lineCap = "round";
+  // eyes
+  for (const ex of [cx - 3.5, cx + 3.5]) {
+    ctx.fillStyle = "white";
+    ctx.strokeStyle = "#3b2a1a";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(ex, cy - 4, 3.3, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#1b1b1b";
+    ctx.beginPath(); ctx.arc(ex + (mood === "sad" ? 0 : 0.7), cy - 3.6 + (mood === "sad" ? 0.8 : 0), mood === "scared" ? 1.2 : 1.7, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.strokeStyle = "#3b2a1a";
+  ctx.lineWidth = 1.5;
+  if (mood === "happy") {
+    ctx.fillStyle = "rgba(255,120,140,0.5)";
+    ctx.beginPath(); ctx.arc(cx - 7, cy + 2, 2.2, 0, Math.PI * 2); ctx.arc(cx + 7, cy + 2, 2.2, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#7a1f1f";
+    ctx.beginPath(); ctx.arc(cx, cy + 2, 4.5, 0, Math.PI); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#ff7a8a";
+    ctx.beginPath(); ctx.arc(cx, cy + 5, 2, 0, Math.PI); ctx.fill();
+  } else if (mood === "scared") {
+    ctx.beginPath(); ctx.moveTo(cx - 6, cy - 10); ctx.lineTo(cx - 2, cy - 9); ctx.moveTo(cx + 2, cy - 9); ctx.lineTo(cx + 6, cy - 10); ctx.stroke();
+    ctx.fillStyle = "#7a1f1f";
+    ctx.beginPath(); ctx.ellipse(cx, cy + 4, 2.6, 3.4, 0, 0, Math.PI * 2); ctx.fill();
+  } else {
+    // sad: droopy eyebrows, frown and a tear
+    ctx.beginPath(); ctx.moveTo(cx - 6.5, cy - 8); ctx.lineTo(cx - 2, cy - 9.5); ctx.moveTo(cx + 2, cy - 9.5); ctx.lineTo(cx + 6.5, cy - 8); ctx.stroke();
+    ctx.lineWidth = 1.8;
+    ctx.beginPath(); ctx.arc(cx, cy + 7, 4, 1.15 * Math.PI, 1.85 * Math.PI); ctx.stroke();
+    ctx.fillStyle = "#5ab4ff";
+    ctx.beginPath(); ctx.moveTo(cx - 5, cy - 1); ctx.quadraticCurveTo(cx - 7.5, cy + 3, cx - 5, cy + 3.5); ctx.quadraticCurveTo(cx - 2.5, cy + 3, cx - 5, cy - 1); ctx.fill();
+  }
 }
 
 function drawBlueberry(x, y, r) {
@@ -1136,10 +1313,11 @@ function drawShip(x, y, t, flame, scale = 1, tilt = 0, withBanana = false) {
 
   // Inside the glass dome
   if (withBanana) {
-    ctx.font = `46px ${EMOJI_FONT}`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText("🍌", 0, -22);
+    ctx.save();
+    ctx.translate(0, -24);
+    ctx.scale(0.8, 0.8);
+    drawBananaKid({ face: "happy", air: true });
+    ctx.restore();
   }
   for (const [fx, fy, fr, col] of [[-30, -10, 12, "#ff9f1c"], [30, -10, 11, "#e63946"], [-12, -6, 8, "#8ac926"], [14, -5, 7, "#7b2cbf"]]) {
     ctx.fillStyle = col;
@@ -1258,10 +1436,7 @@ function drawBlender(x, groundY, t) {
     ctx.save();
     ctx.translate(0, jb - 30);
     ctx.rotate(Math.sin(t * 0.8) * 0.3);
-    ctx.font = `46px ${EMOJI_FONT}`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText("🍌", 0, 0);
+    drawBananaKid({ face: "scared", air: true });
     ctx.restore();
   }
   if (t >= 85) {
@@ -1318,8 +1493,13 @@ function drawBlender(x, groundY, t) {
     ctx.fillRect(-10, jt - 18 - lidDrop, 20, 8);
   }
 
-  // Straw once it's a milkshake
+  // Straw (and a sad little face) once it's a milkshake
   if (t >= 150) {
+    ctx.save();
+    ctx.translate(0, jb - 45);
+    ctx.scale(1.6, 1.6);
+    drawFace(0, 0, "sad");
+    ctx.restore();
     ctx.strokeStyle = "#ff4d6d";
     ctx.lineWidth = 6;
     ctx.beginPath(); ctx.moveTo(8, jt + 30); ctx.lineTo(30, jt - 40); ctx.stroke();
@@ -1335,10 +1515,18 @@ function drawBlender(x, groundY, t) {
 function drawDeath() {
   const t = L.deathT;
   if (L.deathStyle === "dice") {
-    for (const d of L.dice) {
-      if (d.kind === "slice") drawBananaSlice(d.x, d.y, d.rot);
+    [...L.dice.slice(1), L.dice[0]].forEach((d) => {
+      if (d === L.dice[0]) {
+        ctx.save();
+        ctx.translate(d.x, d.y - 6);
+        ctx.scale(2, 2);
+        drawBananaSlice(0, 0, 0);
+        ctx.scale(0.55, 0.55);
+        drawFace(0, 3, "sad");
+        ctx.restore();
+      } else if (d.kind === "slice") drawBananaSlice(d.x, d.y, d.rot);
       else drawPeelBit(d.x, d.y, d.rot);
-    }
+    });
     return;
   }
   // Blender drops in, banana hops in, whizz, milkshake
@@ -1347,12 +1535,12 @@ function drawDeath() {
   const by = GROUND_Y - (1 - easeOutBounce(dropK)) * 500;
   drawBlender(bx, by, t);
   if (t < 35) {
-    drawBanana(L.deadX + Math.sin(t * 1.3) * 2, L.deadY + 25, { angle: Math.sin(t * 0.9) * 0.2 });
+    drawBanana(L.deadX + Math.sin(t * 1.3) * 2, L.deadY + 25, { angle: Math.sin(t * 0.9) * 0.15, face: "scared" });
   } else if (t < 65) {
     const k = (t - 35) / 30;
     const x = lerp(L.deadX, bx, k);
     const y = lerp(L.deadY, GROUND_Y - JAR.baseH - JAR.h + 10, k) - Math.sin(k * Math.PI) * 90;
-    drawBanana(x, y + 25, { angle: k * 8, scale: lerp(1, 0.85, k) });
+    drawBanana(x, y + 25, { angle: k * 8, scale: lerp(1, 0.85, k), face: "scared", air: true });
   }
   if (t >= 150) {
     outlinedText("Banana milkshake!", bx < W / 2 ? bx + 200 : bx - 200, 200, 34, "#fff1a8");
@@ -1366,20 +1554,30 @@ function drawCutscene(portalX) {
   let shipY = -150;
   if (t < 30) {
     const k = t / 30;
-    drawBanana(lerp(PLAYER_X, portalX, k), GROUND_Y - k * 35, { angle: k * 6, scale: 1 - k });
+    drawBanana(lerp(PLAYER_X, portalX, k), GROUND_Y - k * 35, { angle: k * 6, scale: 1 - k, air: true });
   } else if (t < 90) {
     shipY = lerp(-150, restY, easeOut((t - 30) / 60));
   } else {
     shipY = restY;
     drawBeam(portalX, shipY);
     const k = (t - 90) / 70;
-    if (k < 0.85) drawBanana(portalX, lerp(GROUND_Y - 20, restY + 30, easeOut(k)), { angle: Math.sin(t * 0.2) * 0.4, scale: lerp(0.4, 0.8, Math.min(k * 2, 1)) });
+    if (k < 0.85) drawBanana(portalX, lerp(GROUND_Y - 20, restY + 30, easeOut(k)), { angle: Math.sin(t * 0.2) * 0.4, scale: lerp(0.4, 0.8, Math.min(k * 2, 1)), air: true });
   }
   drawShip(portalX, shipY, t, false, 1, 0, t >= 150);
   if (t >= 30) {
     outlinedText("Level complete!", W / 2, 300, 44, "#ffd93b");
     outlinedText(`${L.secondsLeft}s to spare`, W / 2, 342, 22);
   }
+}
+
+function drawShield(x, y) {
+  ctx.save();
+  ctx.globalAlpha = 0.35 + Math.sin(L.frame * 0.3) * 0.15;
+  ctx.fillStyle = "#ffb3c6";
+  ctx.strokeStyle = "#ff4d8d";
+  ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(x, y, 38, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.restore();
 }
 
 function drawEnergyBar() {
@@ -1407,7 +1605,22 @@ function drawHUD() {
   ctx.fillRect(W / 2 - 150, 12, 300 * prog, 10);
 
   drawEnergyBar();
-  outlinedText(flight ? `Level ${L.n} · Fly!` : `Level ${L.n}`, W / 2, 44, 22);
+
+  // hearts, and what you've collected
+  ctx.font = `20px ${EMOJI_FONT}`;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  for (let i = 0; i < run.hearts; i++) ctx.fillText("❤️", 194 + i * 26, 44);
+  ctx.font = `bold 16px ${TEXT_FONT}`;
+  ctx.fillStyle = "white";
+  ctx.strokeStyle = "#3b2a1a";
+  ctx.lineWidth = 3;
+  const toBonus = SETTINGS.bonusEvery - ((run.suns + run.waters) % SETTINGS.bonusEvery);
+  const counter = `☀️ ${run.suns}   💧 ${run.waters}   (bonus in ${toBonus})`;
+  ctx.strokeText(counter, 14, 70);
+  ctx.fillText(counter, 14, 70);
+
+  outlinedText(flight ? `Level ${L.n} of ${MAX_LEVEL} · Fly!` : `Level ${L.n} of ${MAX_LEVEL}`, W / 2, 44, 22);
 
   if (!flight) {
     const secs = Math.max(0, Math.ceil(L.timeLeft / 60));
@@ -1454,8 +1667,10 @@ function drawRunWorld() {
   if (mode === "playing") {
     const p = L.player;
     const flashing = L.hurt > 0 && Math.floor(L.hurt / 5) % 2 === 0;
-    const angle = p.onGround ? Math.sin(L.frame * 0.4) * 0.1 : p.angle;
-    drawBanana(PLAYER_X, p.y, { angle, ducking: p.ducking }, flashing ? 0.35 : 1);
+    const angle = p.onGround ? 0 : p.angle;
+    const face = L.hurt > SETTINGS.hurtFrames - 25 ? "sad" : "happy";
+    if (L.shield > 0) drawShield(PLAYER_X, p.y - 25);
+    drawBanana(PLAYER_X, p.y, { angle, ducking: p.ducking, face, phase: L.frame * 0.35, air: !p.onGround }, flashing ? 0.35 : 1);
   }
   if (mode === "cutscene") drawCutscene(portalX);
 }
@@ -1469,11 +1684,14 @@ function drawFlightWorld() {
   }
   const s = L.ship;
   if (mode === "flying") {
+    if (L.shield > 0) drawShield(SHIP_X, s.y - 5);
     drawShip(SHIP_X, s.y, L.flyT, true, 0.42, s.vy * 0.03, true);
   } else if (mode === "warp") {
     const t = L.warpT;
     drawShip(SHIP_X + t * t * 0.08, s.y - t * t * 0.06, t, true, 0.42, -0.3, true);
-    if (t > 40) {
+    if (t > 40 && L.n >= MAX_LEVEL) {
+      outlinedText("YOU DID IT!", W / 2, 200, 60, "#ffd93b");
+    } else if (t > 40) {
       outlinedText(`Level ${L.n + 1}`, W / 2, 200, 60, "#ffd93b");
       outlinedText("It's getting harder...", W / 2, 250, 24);
     }
@@ -1489,7 +1707,7 @@ function draw() {
 
   if (!L) {
     drawBackground(titleScroll, PALETTES[0]);
-    drawBanana(PLAYER_X, GROUND_Y, { angle: Math.sin(titleScroll * 0.13) * 0.1 });
+    drawBanana(PLAYER_X, GROUND_Y, { phase: titleScroll * 0.12 });
     return;
   }
 
@@ -1503,6 +1721,13 @@ function draw() {
   for (const pt of L.particles) {
     ctx.fillStyle = pt.color;
     ctx.fillRect(pt.x, pt.y, pt.size, pt.size);
+  }
+
+  for (const tx of L.texts) {
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, tx.life / 20);
+    outlinedText(tx.text, tx.x, tx.y, 24, tx.color);
+    ctx.restore();
   }
 
   drawHUD();
@@ -1533,6 +1758,7 @@ function clickThen(fn) {
 }
 document.getElementById("start-btn").addEventListener("click", clickThen(startGame));
 document.getElementById("retry-btn").addEventListener("click", clickThen(retry));
+continueBtn.addEventListener("click", clickThen(continueGame));
 document.getElementById("menu-btn").addEventListener("click", clickThen(backToMenu));
 
 requestAnimationFrame(frame);
