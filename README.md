@@ -1,6 +1,8 @@
 # Dodge The Fruit Salad
 by Eloise Catherin
 
+Source: https://github.com/domcc/dodge-the-fruit-salad
+
 A sideways runner in the style of Geometry Dash. You're a banana running to the portal.
 
 ## Play
