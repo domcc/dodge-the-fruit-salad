@@ -209,22 +209,20 @@ const SONG_VOICE = [
   [0, "ba", "C4", 1], [1, "NA", "E4", 1], [2, "na", "G4", 1],
   [3, "ba", "C4", 1], [4, "NA", "E4", 1], [5, "na", "G4", 1],
   [6, "ba", "A4", 1], [7, "NA", "G4", 1], [8, "na", "E4", 1],
-  [9, "ba", "F4", 1], [10, "NA", "E4", 1], [11, "na", "D4", 3],
-  // anna anna banana, anna anna
-  [16, "an", "F4", 1], [17, "na", "F4", 1], [18, "an", "E4", 1], [19, "na", "E4", 1],
-  [20, "ba", "D4", 1], [21, "NA", "E4", 1], [22, "na", "C4", 2],
-  [24, "an", "D4", 1], [25, "na", "D4", 1], [26, "an", "E4", 1], [27, "na", "G4", 3],
-  // SMASH! banana, banana, banana, SMASH!
-  [32, "smash", "A4", 2],
-  [34, "ba", "G4", 1], [35, "NA", "A4", 1], [36, "na", "G4", 1],
-  [37, "ba", "E4", 1], [38, "NA", "G4", 1], [39, "na", "E4", 1],
-  [40, "ba", "C4", 1], [41, "NA", "D4", 1], [42, "na", "E4", 2],
-  [44, "smash", "C5", 3],
+  [9, "ba", "F4", 1], [10, "NA", "E4", 1], [11, "na", "D4", 2],
+  // SMASH!
+  [14, "smash", "A4", 2],
+  // banana, banana, banana
+  [16, "ba", "G4", 1], [17, "NA", "A4", 1], [18, "na", "G4", 1],
+  [19, "ba", "E4", 1], [20, "NA", "G4", 1], [21, "na", "E4", 1],
+  [22, "ba", "C4", 1], [23, "NA", "D4", 1], [24, "na", "E4", 2],
+  // SMASH!
+  [27, "smash", "C5", 3],
 ];
 const SONG_HOOK = []; // optional extra tune: [step, note, length]
-const SONG_BASS = ["C2", "C2", "F2", "G2", "F2", "C2", "G2", "G2", "A2", "F2", "C2", "C2"]; // one chord root per half bar
-const SONG_STEPS = 48;
-const SONG_CRASH = [32, 44]; // cymbal crash on each SMASH
+const SONG_BASS = ["C2", "C2", "F2", "G2", "C2", "F2", "G2", "C2"]; // one chord root per half bar
+const SONG_STEPS = 32;
+const SONG_CRASH = [14, 27]; // cymbal crash on each SMASH
 
 const Music = {
   enabled: true,
