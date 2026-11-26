@@ -205,6 +205,11 @@ const Sound = {
     if (!this.ready()) return;
     this.tone(880, 880, 0, 0.5, "sine", 0.12);
   },
+  boing() {
+    if (!this.ready()) return;
+    this.tone(160, 420, 0, 0.14, "triangle", 0.12);
+    this.tone(420, 240, 0.12, 0.18, "triangle", 0.07);
+  },
   bonus() {
     if (!this.ready()) return;
     [1047, 1319, 1568, 2093].forEach((f, i) => this.tone(f, f, 0.15 + i * 0.06, 0.3, "sine", 0.12));
@@ -572,13 +577,17 @@ function generateLevel(cfg, n) {
       // A staircase of cutting boards with knives underneath
       const tiers = n >= 3 && Math.random() < 0.5 ? 3 : 2;
       const w = 170, heights = [80, 150, 220];
-      for (let t = 0; t < tiers; t++) platforms.push({ x: x + t * (w + 40), y: GROUND_Y - heights[t], w });
+      for (let t = 0; t < tiers; t++) platforms.push({ x: x + t * (w + 40), y: GROUND_Y - heights[t], w, wobble: 0 });
       const p2 = platforms[platforms.length - tiers + 1];
       const kCount = n >= 4 ? 3 : 2;
       for (let k = 0; k < kCount; k++) knives.push({ x: p2.x + 25 + k * 45 });
       const top = platforms[platforms.length - 1];
       pickups.push({ kind: "sun", x: top.x + top.w / 2, y: top.y - 75, taken: false });
-      if (Math.random() < 0.5) fruits.push(makeFruit(pick(), top.x + top.w - 30, false, top.y));
+      if (Math.random() < 0.5) {
+        const f = makeFruit(pick(), top.x + top.w - 30, false, top.y);
+        f.board = top; // bounces along with the board
+        fruits.push(f);
+      }
       x = top.x + top.w + 60;
     } else if (r < cfg.platformChance + cfg.knifeChance) {
       const count = Math.random() < cfg.groupChance ? 2 : 1;
@@ -689,17 +698,27 @@ function updatePlaying() {
   let landed = false;
 
   // Land on top of cutting boards (you can jump up through them from below)
+  let board = null;
   if (p.vy >= 0) {
     let best = Infinity;
     for (const pl of L.platforms) {
       const sx = pl.x - L.distance + PLAYER_X;
       if (PLAYER_X + 14 < sx || PLAYER_X - 14 > sx + pl.w) continue;
-      if (p.y <= pl.y + 0.5 && newY >= pl.y && pl.y < best) best = pl.y;
+      if (p.y <= pl.y + 0.5 && newY >= pl.y && pl.y < best) { best = pl.y; board = pl; }
     }
     if (best < Infinity) { newY = best; landed = true; }
   }
-  if (newY >= GROUND_Y) { newY = GROUND_Y; landed = true; }
+  if (newY >= GROUND_Y) { newY = GROUND_Y; landed = true; board = null; }
   p.y = newY;
+
+  // Boards wobble when you land on them, and jiggle a little while you stand on them
+  if (board && board !== p.board) {
+    board.wobble = 1;
+    Sound.boing();
+  }
+  if (board) board.wobble = Math.max(board.wobble, 0.25);
+  p.board = board;
+  for (const pl of L.platforms) if (pl.wobble > 0) pl.wobble = pl.wobble < 0.01 ? 0 : pl.wobble * 0.965;
   if (landed) {
     if (!p.onGround) splat(PLAYER_X, p.y, "#c9a27a", 5, 2);
     p.vy = 0;
@@ -1207,6 +1226,13 @@ function drawKnife(x) {
   ctx.restore();
 }
 
+// How far a wobbling board is bouncing and tilting right now
+function boardWobble(pl) {
+  if (!pl || !pl.wobble) return { dy: 0, rot: 0 };
+  const t = L.frame + pl.x * 0.01;
+  return { dy: Math.sin(t * 0.7) * 5 * pl.wobble, rot: Math.sin(t * 0.45) * 0.07 * pl.wobble };
+}
+
 // Platforms are cutting boards
 function drawPlatform(x, y, w) {
   ctx.fillStyle = "#a8703a";
@@ -1643,7 +1669,12 @@ function drawRunWorld() {
   for (const pl of L.platforms) {
     const sx = toScreen(pl.x);
     if (sx > W || sx + pl.w < 0) continue;
-    drawPlatform(sx, pl.y, pl.w);
+    const wb = boardWobble(pl);
+    ctx.save();
+    ctx.translate(sx + pl.w / 2, pl.y + wb.dy);
+    ctx.rotate(wb.rot);
+    drawPlatform(-pl.w / 2, 0, pl.w);
+    ctx.restore();
   }
   for (const pk of L.pickups) {
     if (pk.taken) continue;
@@ -1661,8 +1692,9 @@ function drawRunWorld() {
     if (o.hit) continue;
     const sx = toScreen(o.x);
     if (sx < -50 || sx > W + 50) continue;
-    if (o.type === "blue") drawBlueberry(sx, fruitY(o), o.r);
-    else drawRaspberry(sx, fruitY(o), o.r);
+    const fy = fruitY(o) + boardWobble(o.board).dy;
+    if (o.type === "blue") drawBlueberry(sx, fy, o.r);
+    else drawRaspberry(sx, fy, o.r);
   }
 
   if (mode === "playing") {
@@ -1671,7 +1703,8 @@ function drawRunWorld() {
     const angle = p.onGround ? 0 : p.angle;
     const face = L.hurt > SETTINGS.hurtFrames - 25 ? "sad" : "happy";
     if (L.shield > 0) drawShield(PLAYER_X, p.y - 25);
-    drawBanana(PLAYER_X, p.y, { angle, ducking: p.ducking, face, phase: L.frame * 0.35, air: !p.onGround }, flashing ? 0.35 : 1);
+    const ride = boardWobble(p.board);
+    drawBanana(PLAYER_X, p.y + ride.dy, { angle: angle + ride.rot, ducking: p.ducking, face, phase: L.frame * 0.35, air: !p.onGround }, flashing ? 0.35 : 1);
   }
   if (mode === "cutscene") drawCutscene(portalX);
 }
