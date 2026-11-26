@@ -3,6 +3,8 @@
 body {
   min-height: 100vh;
   display: flex;
+  flex-direction: column;
+  gap: 12px;
   align-items: center;
   justify-content: center;
   background: #ffe9c7;
@@ -68,4 +70,15 @@ button.secondary:hover { background: #6f6152; }
   font-size: clamp(13px, 1.8vw, 17px);
   font-style: italic;
   opacity: 0.8;
+}
+
+#controls {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+#controls.hidden { display: none; }
+button.small-btn {
+  font-size: 18px;
+  padding: 8px 22px;
 }

@@ -30,19 +30,20 @@ const ramp = (n, k) => 1 - Math.exp(-(n - 1) / k);
 
 // How each running level is built. n = level number (1 to 100)
 function levelConfig(n) {
-  const speed = 5 + 6 * ramp(n, 18);                // 5 at level 1, ~8 at 15, ~11 by 70+
-  const length = 5000 + Math.min(n - 1, 20) * 600;  // distance to the portal (stops growing at level 21)
-  const margin = 1.3 - 0.2 * ramp(n, 15);           // spare time: 30% early on, 10% later
+  const speed = 5.5 + 7 * ramp(n, 14);              // 5.5 at level 1, ~9 at 10, ~12.5 later
+  const length = 5500 + Math.min(n - 1, 20) * 650;  // distance to the portal (stops growing at level 21)
+  const margin = 1.25 - 0.17 * ramp(n, 12);         // spare time: 25% early on, 8% later
   return {
     speed,
     length,
-    blueChance: 0.25 + 0.45 * ramp(n, 15),          // chance a fruit is a blueberry
-    floatChance: 0.15 + 0.3 * ramp(n, 15),          // chance fruit floats (duck under!)
-    groupChance: n === 1 ? 0 : 0.45 * ramp(n, 10),  // 2-3 in a row
-    platformChance: 0.15 + 0.15 * ramp(n, 15),
-    knifeChance: n === 1 ? 0.08 : 0.1 + 0.15 * ramp(n, 15),
+    blueChance: 0.3 + 0.5 * ramp(n, 12),            // chance a fruit is a blueberry
+    floatChance: 0.2 + 0.35 * ramp(n, 12),          // chance fruit floats (duck under!)
+    groupChance: n === 1 ? 0.05 : 0.15 + 0.45 * ramp(n, 8), // 2-3 in a row
+    platformChance: 0.18 + 0.17 * ramp(n, 12),
+    knifeChance: 0.12 + 0.2 * ramp(n, 12),
     pickupChance: 0.3,                              // puddle or sunshine in a gap
-    gapVariety: 1 - 0.7 * ramp(n, 12),              // smaller = packed tighter
+    gapVariety: 0.8 - 0.65 * ramp(n, 10),           // smaller = packed tighter
+    gapTight: 0.15 * ramp(n, 15),                   // shaves the gap between hazards
     timeLimit: Math.ceil((length / (speed * 60)) * margin),
   };
 }
@@ -50,10 +51,10 @@ function levelConfig(n) {
 // How each spaceship flight is built
 function flightConfig(n) {
   return {
-    speed: 5 + 4 * ramp(n, 20),
-    length: 2400 + Math.min(n - 1, 15) * 200,
-    gateChance: n === 1 ? 0.25 : 0.35 + 0.5 * ramp(n, 12), // walls of blueberries
-    gap: 170 - 45 * ramp(n, 15),                           // hole in the wall
+    speed: 5.5 + 5 * ramp(n, 15),
+    length: 2600 + Math.min(n - 1, 15) * 220,
+    gateChance: 0.4 + 0.55 * ramp(n, 10),           // walls of blueberries
+    gap: 160 - 50 * ramp(n, 12),                    // hole in the wall
   };
 }
 
@@ -86,6 +87,8 @@ const goMsg = document.getElementById("go-msg");
 const bestEl = document.getElementById("best");
 const retryBtn = document.getElementById("retry-btn");
 const continueBtn = document.getElementById("continue-btn");
+const controls = document.getElementById("controls");
+const pauseBtn = document.getElementById("pause-btn");
 
 let bestLevel = 1;
 try { bestLevel = Number(localStorage.getItem("dtfs-best-level")) || 1; } catch (e) {}
@@ -444,7 +447,7 @@ const Music = {
 
 // Music plays during the game, stops for the blender, game over and menu
 function syncMusic() {
-  const want = ["playing", "cutscene", "flying", "warp"].includes(mode);
+  const want = PAUSABLE.includes(mode) && !paused;
   if (want && !Music.playing) Music.start();
   else if (!want && Music.playing) Music.stop();
 }
@@ -461,6 +464,7 @@ window.addEventListener("keydown", (e) => {
   keys[k] = true;
   if (k === "m" && !e.repeat) Sound.muted = !Sound.muted;
   if (k === "n" && !e.repeat) Music.enabled = !Music.enabled;
+  if ((k === "p" || k === "escape") && !e.repeat) setPaused(!paused);
   if ((k === " " || k === "enter") && !e.repeat) {
     if (mode === "title") startGame();
     else if (mode === "over") retry();
@@ -490,6 +494,7 @@ const wantSprint = () => anyKey("arrowright", "d");
 let mode = "title";
 let L = null; // everything about the current level
 let titleScroll = 0;
+let paused = false;
 // Things you collect that carry over from level to level
 let run = { suns: 0, waters: 0, hearts: 0 };
 
@@ -517,9 +522,19 @@ function startLevel(n) {
     secondsLeft: 0,
   };
   mode = "playing";
+  setPaused(false);
+  showControls(true);
 }
 
 // The spaceship part at the end of each level
+// Start the current level again from the beginning
+function replayLevel() {
+  if (!L) return;
+  hideOverlays();
+  run = { ...L.startRun };
+  startLevel(L.n);
+}
+
 function startShip() {
   L.phase = "flight";
   L.distance = L.cfg.length;
@@ -552,6 +567,8 @@ function backToMenu() {
   hideOverlays();
   L = null;
   mode = "title";
+  setPaused(false);
+  showControls(false);
   bestEl.textContent = bestLevel;
   updateContinueButton();
   startScreen.classList.remove("hidden");
@@ -601,7 +618,7 @@ function generateLevel(cfg, n) {
       x += (count - 1) * spacing;
     }
 
-    const gap = (airDistance + 100) * (1 + Math.random() * cfg.gapVariety);
+    const gap = (airDistance * (1 - cfg.gapTight) + 90) * (1 + Math.random() * cfg.gapVariety);
     if (Math.random() < cfg.pickupChance) {
       const kind = Math.random() < 0.5 ? "puddle" : "sun";
       pickups.push({ kind, x: x + gap / 2, y: kind === "sun" ? GROUND_Y - 95 : GROUND_Y, taken: false });
@@ -957,7 +974,18 @@ function updateParticles() {
   L.texts = L.texts.filter((tx) => tx.life > 0);
 }
 
+const PAUSABLE = ["playing", "cutscene", "flying", "warp"];
+function setPaused(on) {
+  paused = on && PAUSABLE.includes(mode);
+  pauseBtn.textContent = paused ? "▶ Resume" : "⏸ Pause";
+  if (paused) for (const k in keys) keys[k] = false;
+}
+function showControls(on) {
+  controls.classList.toggle("hidden", !on);
+}
+
 function update() {
+  if (paused) { syncMusic(); return; }
   if (mode === "title") { titleScroll += 3; syncMusic(); return; }
   if (mode === "playing") updatePlaying();
   else if (mode === "cutscene") updateCutscene();
@@ -1766,6 +1794,13 @@ function draw() {
 
   drawHUD();
 
+  if (paused) {
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    ctx.fillRect(0, 0, W, H);
+    outlinedText("Paused", W / 2, 190, 60, "#ffd93b");
+    outlinedText("Press Resume or P to keep going", W / 2, 245, 22);
+  }
+
   if (mode === "playing" && L.frame < 120) {
     ctx.save();
     ctx.globalAlpha = L.frame < 90 ? 1 : 1 - (L.frame - 90) / 30;
@@ -1793,6 +1828,9 @@ function clickThen(fn) {
 document.getElementById("start-btn").addEventListener("click", clickThen(startGame));
 document.getElementById("retry-btn").addEventListener("click", clickThen(retry));
 continueBtn.addEventListener("click", clickThen(continueGame));
+pauseBtn.addEventListener("click", clickThen(() => setPaused(!paused)));
+document.getElementById("replay-btn").addEventListener("click", clickThen(replayLevel));
+document.getElementById("menu-btn2").addEventListener("click", clickThen(backToMenu));
 document.getElementById("menu-btn").addEventListener("click", clickThen(backToMenu));
 
 requestAnimationFrame(frame);

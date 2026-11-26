@@ -26,6 +26,7 @@ Open `index.html` in a browser. No install or server needed.
 - Jump / fly up: Space / ↑ / W
 - Duck: ↓ / S (in the air it makes you drop faster)
 - Run faster: → / D
+- Pause: P (or the Pause button under the game). Replay restarts the level, Menu goes back to the title screen
 - Sound on/off: M
 - Music on/off: N (the banana song, edit `SONG_VOICE` in game.js to change the tune or words)
 - Phone: tap the right half to jump, hold the left half to duck
