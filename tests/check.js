@@ -36,7 +36,7 @@ eval(src + `
     }
     return "IMPOSSIBLE";
   }
-  const list = levels.length ? levels : [1, 3, 5, 10, 20, 50, 100];
+  const list = levels.length ? levels : [1, 3, 5, 10, 20, 40, 60, 80];
   let bad = 0;
   for (const n of list) {
     const res = [];

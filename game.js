@@ -30,13 +30,13 @@ const SETTINGS = {
   alienCatchGap: 35,    // it catches you when it gets this close
 };
 
-const MAX_LEVEL = 100;
+const MAX_LEVEL = 80;
 
 // Grows from 0 at level 1 towards 1 by the later levels.
 // Smaller k = gets hard sooner, bigger k = more gradual.
 const ramp = (n, k) => 1 - Math.exp(-(n - 1) / k);
 
-// How each running level is built. n = level number (1 to 100)
+// How each running level is built. n = level number (1 to 80)
 function levelConfig(n) {
   const speed = 5.5 + 7 * ramp(n, 14);              // 5.5 at level 1, ~9 at 10, ~12.5 later
   const length = 5500 + Math.min(n - 1, 20) * 650;  // distance to the portal (stops growing at level 21)
@@ -1025,7 +1025,7 @@ function updateDying() {
 function showWin() {
   mode = "over";
   L.won = true;
-  goTitle.textContent = "You beat all 100 levels!";
+  goTitle.textContent = `You beat all ${MAX_LEVEL} levels!`;
   goMsg.textContent = `Banana champion! You collected ${run.suns} suns and ${run.waters} puddles.`;
   retryBtn.textContent = "Play again";
   gameOverScreen.classList.remove("hidden");
