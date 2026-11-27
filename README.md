@@ -17,6 +17,7 @@ Open `index.html` in a browser. No install or server needed.
 - Every 5th sun/puddle: a big energy boost if you've lost some, or a ❤️ if you're full. Each ❤️ saves you from one death (not from running out of time). Hearts carry over between levels (up to 3).
 - Jump onto the cutting boards to get higher (there are often knives underneath)
 - Some fruit floats at head height: duck under it
+- Every 20th level (20, 40, 60, 80, 100) a fruit alien chases you. It gains on you each time you get hit or slip; run faster (→) to pull ahead. Reach the portal and you're safe
 - Reach the portal before the timer runs out, then fly the fruit-bowl spaceship past the blueberries
 - If you die in the spaceship, "Try again" restarts the flight, not the whole level
 

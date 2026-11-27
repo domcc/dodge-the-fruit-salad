@@ -23,6 +23,11 @@ const SETTINGS = {
   hurtFrames: 70,       // how long you flash after a raspberry hit
   shipLift: 0.55,       // spaceship: how fast it rises while you hold jump
   shipFall: 0.5,        // spaceship: how fast it sinks when you let go
+  alienEvery: 20,       // a fruit alien chases you every 20th level
+  alienStartGap: 400,   // how far behind you it starts
+  alienHitJump: 140,    // how much closer it gets each time you're hit or slip
+  alienFallBack: 0.4,   // how fast it drops back while you run cleanly (faster if you hold →)
+  alienCatchGap: 35,    // it catches you when it gets this close
 };
 
 const MAX_LEVEL = 100;
@@ -52,6 +57,7 @@ function levelConfig(n) {
     gapVariety: 0.8 - 0.65 * ramp(n, 10),           // smaller = packed tighter
     gapTight: 0.15 * ramp(n, 15),                   // shaves the gap between hazards
     timeLimit: Math.ceil((length / (speed * 60)) * margin),
+    alien: n % SETTINGS.alienEvery === 0,           // fruit alien chase level
   };
 }
 
@@ -214,6 +220,32 @@ const Sound = {
   ding() {
     if (!this.ready()) return;
     this.tone(880, 880, 0, 0.5, "sine", 0.12);
+  },
+  growl() {
+    if (!this.ready()) return;
+    const c = this.ctx, t = c.currentTime;
+    const o = c.createOscillator(), g = c.createGain(), lfo = c.createOscillator(), lg = c.createGain();
+    o.type = "sawtooth";
+    o.frequency.setValueAtTime(90, t);
+    o.frequency.linearRampToValueAtTime(60, t + 0.7);
+    lfo.frequency.value = 25; lg.gain.value = 18;
+    lfo.connect(lg).connect(o.frequency);
+    const f = c.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = 500;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.25, t + 0.08);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.75);
+    o.connect(f).connect(g).connect(c.destination);
+    o.start(t); lfo.start(t); o.stop(t + 0.8); lfo.stop(t + 0.8);
+  },
+  chomp() {
+    if (!this.ready()) return;
+    this.noise(0, 0.08, 0.5, "lowpass", 1200, 300);
+    this.tone(180, 90, 0, 0.1, "square", 0.12);
+  },
+  burp() {
+    if (!this.ready()) return;
+    this.tone(120, 70, 0, 0.45, "sawtooth", 0.2);
+    this.noise(0, 0.4, 0.15, "bandpass", 400, 200);
   },
   slip() {
     if (!this.ready()) return;
@@ -529,6 +561,7 @@ function startLevel(n) {
     particles: [],
     texts: [],
     shield: 0,
+    alienGap: SETTINGS.alienStartGap,
     startRun: { ...run },
     cutT: 0,
     secondsLeft: 0,
@@ -732,6 +765,14 @@ function updatePlaying() {
   if (wantSprint()) speed *= SETTINGS.sprintBoost;
   if (L.stumble > 0) { speed *= SETTINGS.stumbleSlow; L.stumble--; }
   L.distance += speed;
+
+  // The fruit alien chases you (every 20th level)
+  if (cfg.alien) {
+    const back = SETTINGS.alienFallBack * (wantSprint() ? 4 : 1);
+    L.alienGap = Math.min(L.alienGap + back, SETTINGS.alienStartGap + 80);
+    if (L.alienGap < 230 && L.frame % 150 === 0) Sound.growl();
+    if (L.alienGap < SETTINGS.alienCatchGap && L.shield <= 0) return die("alien");
+  }
   if (L.hurt > 0) L.hurt--;
   L.timeLeft--;
 
@@ -814,9 +855,10 @@ function updatePlaying() {
       rasp: { dmg: SETTINGS.raspberryDamage, color: "#e8284f", stumble: SETTINGS.stumbleFrames },
       melon: { dmg: SETTINGS.watermelonDamage, color: "#ff4d6d", stumble: 50 },
       rock: { dmg: SETTINGS.rockMelonDamage, color: "#ffa94d", stumble: SETTINGS.stumbleFrames },
-      peel: { dmg: SETTINGS.peelDamage, color: "#ffd93b", stumble: 60 },
+      peel: { dmg: SETTINGS.peelDamage, color: "#ffd93b", stumble: 40 },
     }[o.type];
     L.energy -= hit.dmg;
+    if (cfg.alien) L.alienGap -= SETTINGS.alienHitJump;
     L.hurt = SETTINGS.hurtFrames;
     L.stumble = hit.stumble;
     splat(sx, oy, hit.color, o.type === "melon" ? 22 : 14);
@@ -919,13 +961,14 @@ function die(reason) {
     const y = L.phase === "flight" ? L.ship.y : L.player.y - 25;
     const x = L.phase === "flight" ? SHIP_X : PLAYER_X;
     floatText("Saved by a ❤️!", x + 60, y - 50, "#ff8fab");
+    if (reason === "alien") L.alienGap = 300;
     splat(x, y, "#ff8fab", 18, 4);
     Sound.save();
     return;
   }
   L.deathReason = reason;
   L.deathT = 0;
-  L.deathStyle = reason === "knife" ? "dice" : "blender";
+  L.deathStyle = reason === "knife" ? "dice" : reason === "alien" ? "eaten" : "blender";
   if (L.phase === "flight") { L.deadX = SHIP_X; L.deadY = L.ship.y; }
   else { L.deadX = PLAYER_X; L.deadY = L.player.y - 25; }
   mode = "dying";
@@ -944,15 +987,24 @@ function die(reason) {
         vr: i === 0 ? 0 : (Math.random() - 0.5) * 0.4,
       });
     }
+  } else if (L.deathStyle === "eaten") {
+    Sound.growl();
   } else {
     Sound.squash();
   }
 }
 
 const BLENDER_TIME = 210;
+const EATEN_TIME = 130;
 const DICE_TIME = 90;
 function updateDying() {
   L.deathT++;
+  if (L.deathStyle === "eaten") {
+    if (L.deathT === 30 || L.deathT === 50 || L.deathT === 70) Sound.chomp();
+    if (L.deathT === 90) Sound.burp();
+    if (L.deathT >= EATEN_TIME) showGameOver();
+    return;
+  }
   if (L.deathStyle === "blender") {
     if (L.deathT === 75) Sound.blend(1.2);
     if (L.deathT === 150) Sound.ding();
@@ -987,6 +1039,7 @@ function showGameOver() {
     rasp: ["Blended!", "Too many raspberries. Banana milkshake time."],
     time: ["Out of time!", "The blender got you."],
     knife: ["Diced!", "Watch out for the knives."],
+    alien: ["Gobbled!", "The fruit alien caught you. Keep running and don't trip!"],
     melon: ["Blended!", "Squashed by a watermelon."],
     rock: ["Blended!", "Flattened by a rolling rock melon."],
     peel: ["Blended!", "Slipped on one banana peel too many."],
@@ -1378,6 +1431,95 @@ function drawKnife(x) {
   ctx.restore();
 }
 
+// The fruit alien: a big pink dragon fruit with eyes on stalks and a toothy mouth.
+// (x, gy) = middle of its feet on the ground. chomp: 0 closed .. 1 wide open
+function drawFruitAlien(x, gy, t, chomp = 0.5) {
+  ctx.save();
+  ctx.translate(x, gy);
+  const bob = Math.sin(t * 0.15) * 4;
+  ctx.lineCap = "round";
+
+  // tentacle legs
+  ctx.strokeStyle = "#7b2cbf";
+  ctx.lineWidth = 8;
+  for (let i = 0; i < 5; i++) {
+    const lx = -40 + i * 20, w = Math.sin(t * 0.35 + i * 1.3) * 9;
+    ctx.beginPath();
+    ctx.moveTo(lx, -32 + bob);
+    ctx.quadraticCurveTo(lx + w, -14, lx - w * 0.6, 0);
+    ctx.stroke();
+  }
+
+  ctx.translate(0, -72 + bob);
+
+  // green leafy spikes all round
+  ctx.fillStyle = "#38b000";
+  ctx.strokeStyle = "#1b5e20";
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 10; i++) {
+    const a = -Math.PI + i * (Math.PI * 2 / 10) + Math.sin(t * 0.1 + i) * 0.05;
+    const ca = Math.cos(a), sa = Math.sin(a);
+    ctx.beginPath();
+    ctx.moveTo(ca * 44 - sa * 10, sa * 40 + ca * 10);
+    ctx.lineTo(ca * 68, sa * 62);
+    ctx.lineTo(ca * 44 + sa * 10, sa * 40 - ca * 10);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // body
+  const g = ctx.createRadialGradient(-15, -15, 5, 0, 0, 55);
+  g.addColorStop(0, "#ff8fc0");
+  g.addColorStop(1, "#c9184a");
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.ellipse(0, 0, 54, 48, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = "#800f2f";
+  ctx.lineWidth = 2.5;
+  ctx.stroke();
+  // little green scales on the body
+  ctx.fillStyle = "#70e000";
+  for (const [sx, sy, a] of [[-30, 18, -0.6], [-12, 30, -0.2], [28, -26, 0.8], [-34, -14, -1.2]]) {
+    ctx.save(); ctx.translate(sx, sy); ctx.rotate(a);
+    ctx.beginPath(); ctx.ellipse(0, 0, 4, 9, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
+  // eyes on stalks, looking at you
+  for (const [ex, h] of [[-22, 70], [0, 82], [22, 70]]) {
+    const sway = Math.sin(t * 0.12 + ex) * 6;
+    const tipX = ex + sway, tipY = -h;
+    ctx.strokeStyle = "#38b000";
+    ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.moveTo(ex * 0.6, -36); ctx.quadraticCurveTo(ex, -50, tipX, tipY); ctx.stroke();
+    ctx.fillStyle = "white";
+    ctx.strokeStyle = "#1b1b1b";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(tipX, tipY, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#d00000";
+    ctx.beginPath(); ctx.arc(tipX + 3, tipY, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#1b1b1b";
+    ctx.beginPath(); ctx.arc(tipX + 4, tipY, 2.5, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // big toothy mouth (faces right, towards you)
+  const open = 6 + chomp * 22;
+  ctx.fillStyle = "#3a0012";
+  ctx.beginPath(); ctx.ellipse(18, 12, 26, open / 2 + 2, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "white";
+  for (let i = 0; i < 6; i++) {
+    const tx = -2 + i * 8;
+    ctx.beginPath(); ctx.moveTo(tx, 12 - open / 2); ctx.lineTo(tx + 4, 12 - open / 2 + 7); ctx.lineTo(tx + 8, 12 - open / 2); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(tx, 12 + open / 2); ctx.lineTo(tx + 4, 12 + open / 2 - 7); ctx.lineTo(tx + 8, 12 + open / 2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+// Where to draw the alien: its real position, but always peeking in from the left edge
+function alienScreenX() {
+  return Math.max(PLAYER_X - L.alienGap - 45, -35);
+}
+
 // How far a wobbling board is bouncing and tilting right now
 function boardWobble(pl) {
   if (!pl || !pl.wobble) return { dx: 0, dy: 0, rot: 0 };
@@ -1698,6 +1840,20 @@ function drawBlender(x, groundY, t) {
 
 function drawDeath() {
   const t = L.deathT;
+  if (L.deathStyle === "eaten") {
+    const startX = alienScreenX();
+    const ax = lerp(startX, PLAYER_X - 55, easeOut(Math.min(t / 22, 1)));
+    const chomping = t >= 25 && t < 85;
+    drawFruitAlien(ax, GROUND_Y, L.frame + t, chomping ? 0.5 + 0.5 * Math.sin(t * 0.5) : t < 25 ? 1 : 0.15);
+    if (t < 25) {
+      drawBanana(PLAYER_X, GROUND_Y, { face: "scared", angle: Math.sin(t) * 0.1 });
+    } else if (t < 40) {
+      const k = (t - 25) / 15; // banana gets pulled into the mouth
+      drawBanana(lerp(PLAYER_X, ax + 18, k), lerp(GROUND_Y, GROUND_Y - 50, k), { face: "scared", scale: 1 - k, angle: k * 4 });
+    }
+    if (t >= 90) outlinedText("BURP!", ax + 60, GROUND_Y - 170, 36, "#c77dff");
+    return;
+  }
   if (L.deathStyle === "dice") {
     [...L.dice.slice(1), L.dice[0]].forEach((d) => {
       if (d === L.dice[0]) {
@@ -1804,6 +1960,22 @@ function drawHUD() {
   ctx.strokeText(counter, 14, 70);
   ctx.fillText(counter, 14, 70);
 
+  if (!flight && L.cfg.alien) {
+    const danger = clamp(1 - (L.alienGap - SETTINGS.alienCatchGap) / (SETTINGS.alienStartGap - SETTINGS.alienCatchGap), 0, 1);
+    ctx.font = `bold 16px ${TEXT_FONT}`;
+    ctx.textAlign = "left";
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "#3b2a1a";
+    ctx.fillStyle = danger > 0.6 && Math.floor(L.frame / 8) % 2 ? "#ff4d4d" : "white";
+    ctx.strokeText("👾 Alien", 14, 96);
+    ctx.fillText("👾 Alien", 14, 96);
+    ctx.fillStyle = "rgba(0,0,0,0.3)";
+    ctx.fillRect(96, 89, 88, 12);
+    ctx.fillStyle = danger > 0.6 ? "#ff4d4d" : danger > 0.3 ? "#ffa94d" : "#c77dff";
+    ctx.fillRect(96, 89, 88 * danger, 12);
+    ctx.strokeRect(96, 89, 88, 12);
+  }
+
   outlinedText(flight ? `Level ${L.n} of ${MAX_LEVEL} · Fly!` : `Level ${L.n} of ${MAX_LEVEL}`, W / 2, 44, 22);
 
   if (!flight) {
@@ -1867,6 +2039,15 @@ function drawRunWorld() {
     const ride = boardWobble(p.board);
     const slipSpin = p.slip > 0 ? (40 - p.slip) * 0.3 : 0;
     drawBanana(PLAYER_X + ride.dx, p.y + ride.dy, { angle: angle + ride.rot + slipSpin, ducking: p.ducking, face, phase: L.frame * 0.35, air: !p.onGround }, flashing ? 0.35 : 1);
+  }
+  if (L.cfg.alien && mode !== "dying" && mode !== "over") {
+    if (mode === "cutscene") {
+      // you made it: the alien gives up and runs away
+      drawFruitAlien(alienScreenX() - L.cutT * 5, GROUND_Y, L.frame + L.cutT, 0.2);
+    } else {
+      const close = L.alienGap < 200;
+      drawFruitAlien(alienScreenX(), GROUND_Y, L.frame, close ? 0.5 + 0.5 * Math.sin(L.frame * 0.4) : 0.3);
+    }
   }
   if (mode === "cutscene") drawCutscene(portalX);
 }
@@ -1939,7 +2120,8 @@ function draw() {
     ctx.save();
     ctx.globalAlpha = L.frame < 90 ? 1 : 1 - (L.frame - 90) / 30;
     outlinedText(`Level ${L.n}`, W / 2, 170, 56, "#ffd93b");
-    outlinedText(`Reach the portal in ${L.cfg.timeLimit}s!`, W / 2, 218, 24);
+    if (L.cfg.alien) outlinedText("RUN! A fruit alien is chasing you!", W / 2, 218, 26, "#ff8fc0");
+    else outlinedText(`Reach the portal in ${L.cfg.timeLimit}s!`, W / 2, 218, 24);
     ctx.restore();
   }
 }

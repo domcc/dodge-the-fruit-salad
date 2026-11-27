@@ -18,7 +18,8 @@ eval(src + `
 ;(function () {
   const snap = () => ({ L: structuredClone(L), mode });
   const load = (s) => { L = structuredClone(s.L); mode = s.mode; };
-  const setAct = (a) => { for (const k in keys) keys[k] = false; if (a === 1) keys[" "] = true; if (a === 2) keys["arrowdown"] = true; };
+  // actions: 0 nothing, 1 jump, 2 duck, 3 run faster
+  const setAct = (a) => { for (const k in keys) keys[k] = false; if (a === 1) keys[" "] = true; if (a === 2) keys["arrowdown"] = true; if (a === 3) keys["arrowright"] = true; };
   // depth-first search over jump / duck / nothing, a few frames at a time
   function solve(from, to, acts, stepN) {
     const stack = [{ s: snap(), i: 0 }];
@@ -41,7 +42,7 @@ eval(src + `
     const res = [];
     for (let t = 0; t < 2; t++) {
       startLevel(n);
-      const run = solve("playing", "cutscene", [0, 1, 2], 4);
+      const run = solve("playing", "cutscene", levelConfig(n).alien ? [0, 1, 2, 3] : [0, 1, 2], 4);
       let fly = "-";
       if (run === "ok") { for (let i = 0; i < 200 && mode === "cutscene"; i++) update(); fly = solve("flying", "warp", [0, 1], 3); }
       if (run !== "ok" || fly !== "ok") bad++;
