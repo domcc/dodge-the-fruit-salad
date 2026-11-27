@@ -7,6 +7,9 @@
 const SETTINGS = {
   maxEnergy: 100,
   raspberryDamage: 35,  // 3 raspberries from full = blender time
+  watermelonDamage: 50, // big and heavy
+  rockMelonDamage: 35,  // rolls towards you
+  peelDamage: 10,       // banana peels make you slip
   pickupEnergy: 15,     // energy from a puddle or a sunshine
   bonusEvery: 5,        // every 5th sun/puddle gives a bonus...
   bonusEnergy: 35,      // ...this much energy if you've lost some
@@ -41,6 +44,10 @@ function levelConfig(n) {
     groupChance: n === 1 ? 0.05 : 0.15 + 0.45 * ramp(n, 8), // 2-3 in a row
     platformChance: 0.18 + 0.17 * ramp(n, 12),
     knifeChance: 0.12 + 0.2 * ramp(n, 12),
+    // of the fruit that appear, how many are the special ones
+    peelChance: 0.15 + 0.05 * ramp(n, 12),
+    watermelonChance: n < 2 ? 0 : 0.12 + 0.06 * ramp(n, 12),
+    rockMelonChance: n < 3 ? 0 : 0.12 + 0.08 * ramp(n, 12),
     pickupChance: 0.3,                              // puddle or sunshine in a gap
     gapVariety: 0.8 - 0.65 * ramp(n, 10),           // smaller = packed tighter
     gapTight: 0.15 * ramp(n, 15),                   // shaves the gap between hazards
@@ -207,6 +214,11 @@ const Sound = {
   ding() {
     if (!this.ready()) return;
     this.tone(880, 880, 0, 0.5, "sine", 0.12);
+  },
+  slip() {
+    if (!this.ready()) return;
+    this.tone(900, 200, 0, 0.35, "sine", 0.12);
+    this.noise(0, 0.25, 0.12, "bandpass", 2500, 800);
   },
   boing() {
     if (!this.ready()) return;
@@ -575,11 +587,17 @@ function backToMenu() {
 }
 
 // ================= LEVEL BUILDING =================
+// Fruit types: blue (blueberry), rasp (raspberry), melon (watermelon),
+// rock (rock melon, rolls towards you), peel (banana peel, makes you slip)
+const FRUIT_SIZE = { blue: 17, rasp: 20, melon: 30, rock: 24, peel: 14 };
 function makeFruit(type, x, floating, surfaceY = GROUND_Y) {
-  const r = type === "blue" ? 17 : 20;
+  const r = FRUIT_SIZE[type];
   // Floating fruit sits at head height: duck under it (or jump right over it)
-  const y = floating ? 345 - r : surfaceY - r;
-  return { type, x, y, r, floating, hit: false, bob: Math.random() * Math.PI * 2 };
+  let y = floating ? 345 - r : surfaceY - r;
+  if (type === "peel") y = surfaceY - 6;
+  const o = { type, x, y, r, floating, hit: false, bob: Math.random() * Math.PI * 2, spin: 0 };
+  if (type === "rock") o.vx = -(1.5 + Math.random() * 1.5);
+  return o;
 }
 
 function generateLevel(cfg, n) {
@@ -611,11 +629,21 @@ function generateLevel(cfg, n) {
       for (let k = 0; k < count; k++) knives.push({ x: x + k * 34 });
       x += (count - 1) * 34;
     } else {
-      const floating = Math.random() < cfg.floatChance;
-      const count = Math.random() < cfg.groupChance ? (floating ? 3 : 2) : 1;
-      const spacing = floating ? 44 : 38;
-      for (let k = 0; k < count; k++) fruits.push(makeFruit(pick(), x + k * spacing, floating));
-      x += (count - 1) * spacing;
+      const sp = Math.random();
+      if (sp < cfg.peelChance) {
+        fruits.push(makeFruit("peel", x, false));
+      } else if (sp < cfg.peelChance + cfg.watermelonChance) {
+        fruits.push(makeFruit("melon", x, false));
+      } else if (sp < cfg.peelChance + cfg.watermelonChance + cfg.rockMelonChance) {
+        fruits.push(makeFruit("rock", x, false));
+        x += 120; // extra room, it rolls towards you
+      } else {
+        const floating = Math.random() < cfg.floatChance;
+        const count = Math.random() < cfg.groupChance ? (floating ? 3 : 2) : 1;
+        const spacing = floating ? 44 : 38;
+        for (let k = 0; k < count; k++) fruits.push(makeFruit(pick(), x + k * spacing, floating));
+        x += (count - 1) * spacing;
+      }
     }
 
     const gap = (airDistance * (1 - cfg.gapTight) + 90) * (1 + Math.random() * cfg.gapVariety);
@@ -746,6 +774,13 @@ function updatePlaying() {
     p.angle += 0.18; // Geometry Dash style spin
   }
 
+  for (const o of L.fruits) {
+    if (o.type !== "rock" || o.hit) continue;
+    const sx = o.x - L.distance + PLAYER_X;
+    if (sx < W + 150) { o.x += o.vx; o.spin += o.vx / o.r; } // starts rolling once it's nearly on screen
+  }
+  if (p.slip > 0) p.slip--;
+
   const box = playerBox(p);
   if (L.shield > 0) L.shield--;
   const safe = L.shield > 0;
@@ -772,14 +807,23 @@ function updatePlaying() {
       splat(sx, oy, "#3b4cca", 20);
       return die("blue");
     }
-    if (L.hurt > 0) continue; // still flashing from the last raspberry
+    if (o.type === "peel" && !p.onGround) continue; // you only slip if you step on it
+    if (L.hurt > 0) continue; // still flashing from the last hit
     o.hit = true;
-    L.energy -= SETTINGS.raspberryDamage;
+    const hit = {
+      rasp: { dmg: SETTINGS.raspberryDamage, color: "#e8284f", stumble: SETTINGS.stumbleFrames },
+      melon: { dmg: SETTINGS.watermelonDamage, color: "#ff4d6d", stumble: 50 },
+      rock: { dmg: SETTINGS.rockMelonDamage, color: "#ffa94d", stumble: SETTINGS.stumbleFrames },
+      peel: { dmg: SETTINGS.peelDamage, color: "#ffd93b", stumble: 60 },
+    }[o.type];
+    L.energy -= hit.dmg;
     L.hurt = SETTINGS.hurtFrames;
-    L.stumble = SETTINGS.stumbleFrames;
-    splat(sx, oy, "#e8284f", 14);
-    if (L.energy <= 0) { L.energy = 0; return die("rasp"); }
-    Sound.hurt();
+    L.stumble = hit.stumble;
+    splat(sx, oy, hit.color, o.type === "melon" ? 22 : 14);
+    if (o.type === "melon") splat(sx, oy, "#2b9348", 8);
+    if (o.type === "peel") { p.slip = 40; floatText("Whoa!", PLAYER_X + 30, p.y - 70, "#ffd93b"); }
+    if (L.energy <= 0) { L.energy = 0; return die(o.type); }
+    if (o.type === "peel") Sound.slip(); else Sound.hurt();
   }
 
   // Energy pickups
@@ -943,6 +987,9 @@ function showGameOver() {
     rasp: ["Blended!", "Too many raspberries. Banana milkshake time."],
     time: ["Out of time!", "The blender got you."],
     knife: ["Diced!", "Watch out for the knives."],
+    melon: ["Blended!", "Squashed by a watermelon."],
+    rock: ["Blended!", "Flattened by a rolling rock melon."],
+    peel: ["Blended!", "Slipped on one banana peel too many."],
     shipblue: ["Blended!", "Your spaceship hit a blueberry."],
   };
   const [title, line] = msgs[L.deathReason];
@@ -1196,6 +1243,83 @@ function drawBlueberry(x, y, r) {
   ctx.fill();
 }
 
+function drawWatermelon(x, y, r) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.fillStyle = "#2b9348";
+  ctx.beginPath(); ctx.ellipse(0, 0, r * 1.1, r, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.save();
+  ctx.clip();
+  ctx.strokeStyle = "#155d27";
+  ctx.lineWidth = 5;
+  for (let i = -3; i <= 3; i++) {
+    ctx.beginPath();
+    ctx.moveTo(i * r * 0.32, -r);
+    ctx.quadraticCurveTo(i * r * 0.45 + 4, 0, i * r * 0.32, r);
+    ctx.stroke();
+  }
+  ctx.restore();
+  ctx.fillStyle = "rgba(255,255,255,0.25)";
+  ctx.beginPath(); ctx.ellipse(-r * 0.45, -r * 0.45, r * 0.3, r * 0.15, -0.6, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = "#0b3d1a";
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.ellipse(0, 0, r * 1.1, r, 0, 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+}
+
+function drawRockMelon(x, y, r, spin) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(spin);
+  const g = ctx.createRadialGradient(-r * 0.3, -r * 0.3, 2, 0, 0, r);
+  g.addColorStop(0, "#f4c27a");
+  g.addColorStop(1, "#c98a3d");
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
+  // netted skin
+  ctx.save();
+  ctx.clip();
+  ctx.strokeStyle = "rgba(255,240,210,0.75)";
+  ctx.lineWidth = 1.5;
+  for (let i = -r; i <= r; i += 7) {
+    ctx.beginPath(); ctx.moveTo(i - r, -r); ctx.lineTo(i + r, r); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(i + r, -r); ctx.lineTo(i - r, r); ctx.stroke();
+  }
+  ctx.restore();
+  // a stripe so you can see it rolling
+  ctx.strokeStyle = "#8d5a1f";
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, -r); ctx.quadraticCurveTo(r * 0.4, 0, 0, r); ctx.stroke();
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+}
+
+// A squashed banana peel lying on the ground
+function drawBananaPeel(x, y) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.fillStyle = "#ffd93b";
+  ctx.strokeStyle = "#a07800";
+  ctx.lineWidth = 1.5;
+  for (const [a, len] of [[-2.6, 18], [-1.9, 15], [-1.2, 17], [-0.5, 16]]) {
+    ctx.save();
+    ctx.rotate(a + Math.PI / 2);
+    ctx.beginPath();
+    ctx.moveTo(-4, 0);
+    ctx.quadraticCurveTo(-5, len * 0.6, 0, len);
+    ctx.quadraticCurveTo(5, len * 0.6, 4, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+  ctx.fillStyle = "#f4c430";
+  ctx.beginPath(); ctx.ellipse(0, 2, 7, 5, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = "#5c4013";
+  ctx.fillRect(-2, -3, 4, 4);
+  ctx.restore();
+}
+
 const DRUPELETS = [
   [0, -0.55], [-0.42, -0.35], [0.42, -0.35], [-0.6, 0.05], [0.6, 0.05],
   [-0.2, -0.1], [0.2, -0.1], [-0.38, 0.38], [0.38, 0.38], [0, 0.25], [0, 0.65],
@@ -1256,9 +1380,14 @@ function drawKnife(x) {
 
 // How far a wobbling board is bouncing and tilting right now
 function boardWobble(pl) {
-  if (!pl || !pl.wobble) return { dy: 0, rot: 0 };
+  if (!pl || !pl.wobble) return { dx: 0, dy: 0, rot: 0 };
   const t = L.frame + pl.x * 0.01;
-  return { dy: Math.sin(t * 0.7) * 5 * pl.wobble, rot: Math.sin(t * 0.45) * 0.07 * pl.wobble };
+  const sway = Math.sin(t * 0.32); // -1 (left) .. 1 (right)
+  return {
+    dx: sway * 10 * pl.wobble,                    // slides side to side
+    dy: Math.abs(sway) * 2 * pl.wobble,           // dips a little at each end
+    rot: sway * 0.13 * pl.wobble,                 // tilts towards the side it's swaying to
+  };
 }
 
 // Platforms are cutting boards
@@ -1699,7 +1828,7 @@ function drawRunWorld() {
     if (sx > W || sx + pl.w < 0) continue;
     const wb = boardWobble(pl);
     ctx.save();
-    ctx.translate(sx + pl.w / 2, pl.y + wb.dy);
+    ctx.translate(sx + pl.w / 2 + wb.dx, pl.y + wb.dy);
     ctx.rotate(wb.rot);
     drawPlatform(-pl.w / 2, 0, pl.w);
     ctx.restore();
@@ -1720,9 +1849,13 @@ function drawRunWorld() {
     if (o.hit) continue;
     const sx = toScreen(o.x);
     if (sx < -50 || sx > W + 50) continue;
-    const fy = fruitY(o) + boardWobble(o.board).dy;
-    if (o.type === "blue") drawBlueberry(sx, fy, o.r);
-    else drawRaspberry(sx, fy, o.r);
+    const bw = boardWobble(o.board);
+    const fx = sx + bw.dx, fy = fruitY(o) + bw.dy;
+    if (o.type === "blue") drawBlueberry(fx, fy, o.r);
+    else if (o.type === "rasp") drawRaspberry(fx, fy, o.r);
+    else if (o.type === "melon") drawWatermelon(fx, fy, o.r);
+    else if (o.type === "rock") drawRockMelon(fx, fy, o.r, o.spin);
+    else drawBananaPeel(fx, fy);
   }
 
   if (mode === "playing") {
@@ -1732,7 +1865,8 @@ function drawRunWorld() {
     const face = L.hurt > SETTINGS.hurtFrames - 25 ? "sad" : "happy";
     if (L.shield > 0) drawShield(PLAYER_X, p.y - 25);
     const ride = boardWobble(p.board);
-    drawBanana(PLAYER_X, p.y + ride.dy, { angle: angle + ride.rot, ducking: p.ducking, face, phase: L.frame * 0.35, air: !p.onGround }, flashing ? 0.35 : 1);
+    const slipSpin = p.slip > 0 ? (40 - p.slip) * 0.3 : 0;
+    drawBanana(PLAYER_X + ride.dx, p.y + ride.dy, { angle: angle + ride.rot + slipSpin, ducking: p.ducking, face, phase: L.frame * 0.35, air: !p.onGround }, flashing ? 0.35 : 1);
   }
   if (mode === "cutscene") drawCutscene(portalX);
 }

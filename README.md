@@ -12,6 +12,7 @@ Open `index.html` in a browser. No install or server needed.
 - Blueberries get you straight away, and so do raspberries once your energy runs out. Either way the blender turns you into a banana milkshake.
 - Knives dice you into banana slices
 - Raspberries drain your energy (3 hits from full and you're out)
+- Watermelons are big and heavy (lots of energy), rock melons roll towards you, and banana peels make you slip and spin
 - Splash through puddles or grab a sunshine for a bit of energy back
 - Every 5th sun/puddle: a big energy boost if you've lost some, or a ❤️ if you're full. Each ❤️ saves you from one death (not from running out of time). Hearts carry over between levels (up to 3).
 - Jump onto the cutting boards to get higher (there are often knives underneath)
@@ -38,3 +39,6 @@ Open `index.html` in a browser. No install or server needed.
   - `SETTINGS`: jump height, energy, raspberry damage, spaceship handling
   - `MAX_LEVEL` (100) and `levelConfig(n)`: how each running level gets harder
   - `flightConfig(n)`: how each spaceship flight gets harder
+
+## Checking levels
+`node tests/check.js` plays sample levels automatically (no browser) and reports whether each one, and its spaceship flight, can be finished. Pass level numbers to check specific ones, e.g. `node tests/check.js 1 2 3`.
