@@ -18,6 +18,7 @@ Open `index.html` in a browser. No install or server needed.
 - Jump onto the cutting boards to get higher (there are often knives underneath)
 - Some fruit floats at head height: duck under it
 - Every 20th level (20, 40, 60, 80) a fruit alien chases you. It gains on you each time you get hit or slip; run faster (→) to pull ahead. Reach the portal and you're safe
+- Every 30th level (30, 60) is a volcano obstacle course: lava pits (falling in is instant toast), lava lakes you cross on rock ledges, and fireballs that fly across at different heights (⚠️ warns you). Level 60 also has the fruit alien
 - Reach the portal before the timer runs out, then fly the fruit-bowl spaceship past the blueberries
 - If you die in the spaceship, "Try again" restarts the flight, not the whole level
 

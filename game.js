@@ -23,6 +23,8 @@ const SETTINGS = {
   hurtFrames: 70,       // how long you flash after a raspberry hit
   shipLift: 0.55,       // spaceship: how fast it rises while you hold jump
   shipFall: 0.5,        // spaceship: how fast it sinks when you let go
+  volcanoEvery: 30,     // every 30th level is a volcano obstacle course
+  fireballDamage: 35,
   alienEvery: 20,       // a fruit alien chases you every 20th level
   alienStartGap: 400,   // how far behind you it starts
   alienHitJump: 140,    // how much closer it gets each time you're hit or slip
@@ -58,6 +60,7 @@ function levelConfig(n) {
     gapTight: 0.15 * ramp(n, 15),                   // shaves the gap between hazards
     timeLimit: Math.ceil((length / (speed * 60)) * margin),
     alien: n % SETTINGS.alienEvery === 0,           // fruit alien chase level
+    volcano: n % SETTINGS.volcanoEvery === 0,       // volcano obstacle course
   };
 }
 
@@ -92,6 +95,8 @@ const PALETTES = [
   { skyTop: "#14163f", skyBot: "#3e3580", hill: "#2a2468", ground: "#3a337a", dirt: "#221c4a" }, // night
   { skyTop: "#0d5c68", skyBot: "#3fa3a3", hill: "#1d6e55", ground: "#2a8a58", dirt: "#553a22" }, // teal
 ];
+
+const VOLCANO_PALETTE = { skyTop: "#1a0505", skyBot: "#8a2a0a", hill: "#2b1010", ground: "#3d2b2b", dirt: "#1f1414", cloud: "rgba(70,50,50,0.55)" };
 
 const startScreen = document.getElementById("start-screen");
 const gameOverScreen = document.getElementById("gameover-screen");
@@ -220,6 +225,15 @@ const Sound = {
   ding() {
     if (!this.ready()) return;
     this.tone(880, 880, 0, 0.5, "sine", 0.12);
+  },
+  whoosh() {
+    if (!this.ready()) return;
+    this.noise(0, 0.45, 0.12, "bandpass", 300, 1400);
+  },
+  sizzle() {
+    if (!this.ready()) return;
+    this.noise(0, 1.1, 0.25, "highpass", 3500, 1500);
+    this.squash(0.05);
   },
   growl() {
     if (!this.ready()) return;
@@ -544,12 +558,12 @@ let run = { suns: 0, waters: 0, hearts: 0 };
 
 function startLevel(n) {
   const cfg = levelConfig(n);
-  const world = generateLevel(cfg, n);
+  const world = cfg.volcano ? generateVolcano(cfg, n) : generateLevel(cfg, n);
   L = {
     n,
     cfg,
     phase: "run",
-    palette: PALETTES[(n - 1) % PALETTES.length],
+    palette: cfg.volcano ? VOLCANO_PALETTE : PALETTES[(n - 1) % PALETTES.length],
     distance: 0,
     frame: 0,
     timeLeft: cfg.timeLimit * 60,
@@ -686,7 +700,55 @@ function generateLevel(cfg, n) {
     }
     x += gap;
   }
-  return { fruits, knives, platforms, pickups };
+  return { fruits, knives, platforms, pickups, pits: [], fireballs: [] };
+}
+
+// Volcano obstacle course: lava pits, lava lakes with rock ledges, flying fireballs
+function generateVolcano(cfg, n) {
+  const fruits = [], knives = [], platforms = [], pickups = [], pits = [], fireballs = [];
+  const airDistance = 38 * cfg.speed * SETTINGS.sprintBoost;
+  let x = 900;
+  while (x < cfg.length - 800) {
+    const r = Math.random();
+    if (r < 0.35) {
+      // a lava pit to jump over
+      const w = 90 + Math.random() * 70;
+      pits.push({ x, w });
+      x += w;
+    } else if (r < 0.65) {
+      // a lava lake: hop across the rock ledges
+      const count = 2 + Math.floor(Math.random() * 2);
+      const lw = 110, between = 70;
+      const heights = [70, 130, 90, 150];
+      const shift = Math.random() < 0.5 ? 0 : 1;
+      const lakeStart = x;
+      let lx = x + 50;
+      for (let i = 0; i < count; i++) {
+        platforms.push({ x: lx, y: GROUND_Y - heights[(i + shift) % 4], w: lw, wobble: 0, rock: true });
+        lx += lw + between;
+      }
+      const lakeEnd = lx - between + 50;
+      pits.push({ x: lakeStart, w: lakeEnd - lakeStart });
+      if (Math.random() < 0.5) {
+        const top = platforms[platforms.length - 1];
+        pickups.push({ kind: "sun", x: top.x + top.w / 2, y: top.y - 75, taken: false });
+      }
+      x = lakeEnd;
+    } else if (r < 0.8) {
+      knives.push({ x });
+    } else {
+      fruits.push(makeFruit(Math.random() < 0.6 ? "blue" : "rasp", x, Math.random() < 0.3));
+    }
+    x += (airDistance * (1 - cfg.gapTight) + 90) * (1 + Math.random() * cfg.gapVariety);
+  }
+  // Fireballs fly across from the right at three heights:
+  // low (jump over), middle (duck under), high (watch out on the ledges)
+  for (let fx = 1500; fx < cfg.length - 300; fx += 450 + Math.random() * 500) {
+    const lane = Math.random();
+    const y = lane < 0.4 ? GROUND_Y - 18 : lane < 0.75 ? 330 : 205;
+    fireballs.push({ x: fx, y, vx: -(3 + Math.random() * 3), wave: lane >= 0.75 ? 20 : 0, t: 0, hit: false, heard: false });
+  }
+  return { fruits, knives, platforms, pickups, pits, fireballs };
 }
 
 function generateFlight(fc) {
@@ -711,6 +773,10 @@ function generateFlight(fc) {
 
 // ================= UPDATE =================
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+function fireballY(fb) {
+  return fb.y + Math.sin(fb.t * 0.08) * fb.wave;
+}
 
 function fruitY(o) {
   return o.floating ? o.y + Math.sin(L.frame * 0.08 + o.bob) * 3 : o.y;
@@ -794,15 +860,22 @@ function updatePlaying() {
     }
     if (best < Infinity) { newY = best; landed = true; }
   }
-  if (newY >= GROUND_Y) { newY = GROUND_Y; landed = true; board = null; }
+  const overLava = L.pits.some((pt) => {
+    const sx = pt.x - L.distance + PLAYER_X;
+    return PLAYER_X - 8 > sx && PLAYER_X + 8 < sx + pt.w;
+  });
+  if (overLava && newY > GROUND_Y + 2) p.sinking = true; // once you're in the lava, you can't get out
+  if (newY >= GROUND_Y && !overLava && !p.sinking) { newY = GROUND_Y; landed = true; board = null; }
   p.y = newY;
 
   // Boards wobble when you land on them, and jiggle a little while you stand on them
-  if (board && board !== p.board) {
+  if (p.sinking && p.y > GROUND_Y + 30) return die("lava");
+
+  if (board && !board.rock && board !== p.board) {
     board.wobble = 1;
     Sound.boing();
   }
-  if (board) board.wobble = Math.max(board.wobble, 0.25);
+  if (board && !board.rock) board.wobble = Math.max(board.wobble, 0.25);
   p.board = board;
   for (const pl of L.platforms) if (pl.wobble > 0) pl.wobble = pl.wobble < 0.01 ? 0 : pl.wobble * 0.965;
   if (landed) {
@@ -821,6 +894,16 @@ function updatePlaying() {
     if (sx < W + 150) { o.x += o.vx; o.spin += o.vx / o.r; } // starts rolling once it's nearly on screen
   }
   if (p.slip > 0) p.slip--;
+
+  for (const fb of L.fireballs) {
+    if (fb.hit) continue;
+    const sx = fb.x - L.distance + PLAYER_X;
+    if (sx < W + 60) {
+      fb.x += fb.vx;
+      fb.t++;
+      if (!fb.heard) { fb.heard = true; Sound.whoosh(); }
+    }
+  }
 
   const box = playerBox(p);
   if (L.shield > 0) L.shield--;
@@ -866,6 +949,23 @@ function updatePlaying() {
     if (o.type === "peel") { p.slip = 40; floatText("Whoa!", PLAYER_X + 30, p.y - 70, "#ffd93b"); }
     if (L.energy <= 0) { L.energy = 0; return die(o.type); }
     if (o.type === "peel") Sound.slip(); else Sound.hurt();
+  }
+
+  // Fireballs
+  for (const fb of L.fireballs) {
+    if (safe || fb.hit) continue;
+    const sx = fb.x - L.distance + PLAYER_X;
+    if (Math.abs(sx - PLAYER_X) > 60) continue;
+    if (!circleHitsBox(sx, fireballY(fb), 11, box) || L.hurt > 0) continue;
+    fb.hit = true;
+    L.energy -= SETTINGS.fireballDamage;
+    L.hurt = SETTINGS.hurtFrames;
+    L.stumble = SETTINGS.stumbleFrames;
+    if (cfg.alien) L.alienGap -= SETTINGS.alienHitJump;
+    splat(sx, fireballY(fb), "#ff9f1c", 16);
+    floatText("Ouch, hot!", PLAYER_X + 30, p.y - 70, "#ff9f1c");
+    if (L.energy <= 0) { L.energy = 0; return die("fire"); }
+    Sound.hurt();
   }
 
   // Energy pickups
@@ -962,13 +1062,19 @@ function die(reason) {
     const x = L.phase === "flight" ? SHIP_X : PLAYER_X;
     floatText("Saved by a ❤️!", x + 60, y - 50, "#ff8fab");
     if (reason === "alien") L.alienGap = 300;
+    if (reason === "lava") {
+      // pop back out onto the far side of the lava
+      const pit = L.pits.find((pt) => L.distance >= pt.x - 10 && L.distance <= pt.x + pt.w + 10);
+      if (pit) L.distance = pit.x + pit.w + 15;
+      L.player.y = GROUND_Y; L.player.vy = 0; L.player.onGround = true; L.player.sinking = false;
+    }
     splat(x, y, "#ff8fab", 18, 4);
     Sound.save();
     return;
   }
   L.deathReason = reason;
   L.deathT = 0;
-  L.deathStyle = reason === "knife" ? "dice" : reason === "alien" ? "eaten" : "blender";
+  L.deathStyle = reason === "knife" ? "dice" : reason === "alien" ? "eaten" : reason === "lava" ? "lava" : "blender";
   if (L.phase === "flight") { L.deadX = SHIP_X; L.deadY = L.ship.y; }
   else { L.deadX = PLAYER_X; L.deadY = L.player.y - 25; }
   mode = "dying";
@@ -987,6 +1093,8 @@ function die(reason) {
         vr: i === 0 ? 0 : (Math.random() - 0.5) * 0.4,
       });
     }
+  } else if (L.deathStyle === "lava") {
+    Sound.sizzle();
   } else if (L.deathStyle === "eaten") {
     Sound.growl();
   } else {
@@ -999,6 +1107,11 @@ const EATEN_TIME = 130;
 const DICE_TIME = 90;
 function updateDying() {
   L.deathT++;
+  if (L.deathStyle === "lava") {
+    if (L.deathT % 6 === 0 && L.deathT < 60) splat(L.deadX + (Math.random() - 0.5) * 30, GROUND_Y + 5, "#ffb703", 3, 3);
+    if (L.deathT >= 110) showGameOver();
+    return;
+  }
   if (L.deathStyle === "eaten") {
     if (L.deathT === 30 || L.deathT === 50 || L.deathT === 70) Sound.chomp();
     if (L.deathT === 90) Sound.burp();
@@ -1040,6 +1153,8 @@ function showGameOver() {
     time: ["Out of time!", "The blender got you."],
     knife: ["Diced!", "Watch out for the knives."],
     alien: ["Gobbled!", "The fruit alien caught you. Keep running and don't trip!"],
+    lava: ["Toasted!", "You fell in the lava."],
+    fire: ["Toasted!", "Too many fireballs."],
     melon: ["Blended!", "Squashed by a watermelon."],
     rock: ["Blended!", "Flattened by a rolling rock melon."],
     peel: ["Blended!", "Slipped on one banana peel too many."],
@@ -1126,7 +1241,7 @@ function drawBackground(dist, pal) {
   ctx.fillStyle = sky;
   ctx.fillRect(0, 0, W, H);
 
-  ctx.fillStyle = "rgba(255,255,255,0.4)";
+  ctx.fillStyle = pal.cloud || "rgba(255,255,255,0.4)";
   const span = W + 200;
   for (let i = 0; i < 6; i++) {
     const cx = (((i * 170 - dist * 0.15) % span) + span) % span - 100;
@@ -1515,6 +1630,117 @@ function drawFruitAlien(x, gy, t, chomp = 0.5) {
   ctx.restore();
 }
 
+// ---------- Volcano pieces ----------
+function drawVolcanoBackdrop(dist, t) {
+  const span = W + 700;
+  const cx = (((760 - dist * 0.08) % span) + span) % span - 350;
+  // the volcano
+  ctx.fillStyle = "#2a0d0d";
+  ctx.beginPath();
+  ctx.moveTo(cx - 260, GROUND_Y - 30);
+  ctx.lineTo(cx - 45, 150);
+  ctx.lineTo(cx + 45, 150);
+  ctx.lineTo(cx + 260, GROUND_Y - 30);
+  ctx.closePath();
+  ctx.fill();
+  // glowing crater and lava streams
+  ctx.fillStyle = "#ff6d00";
+  ctx.beginPath(); ctx.ellipse(cx, 152, 44, 8, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = "rgba(255,120,0,0.8)";
+  ctx.lineWidth = 5;
+  for (const [dx, k] of [[-20, -1], [15, 1]]) {
+    ctx.beginPath();
+    ctx.moveTo(cx + dx, 155);
+    ctx.quadraticCurveTo(cx + dx + k * 40, 230, cx + dx + k * 70, GROUND_Y - 40);
+    ctx.stroke();
+  }
+  // eruption blobs
+  for (let i = 0; i < 6; i++) {
+    const k = ((t * 1.2 + i * 37) % 90) / 90;
+    const bx = cx + Math.sin(i * 2.1) * 60 * k;
+    const by = 150 - Math.sin(k * Math.PI) * 110;
+    ctx.fillStyle = `rgba(255,${120 + i * 15},0,${1 - k})`;
+    ctx.beginPath(); ctx.arc(bx, by, 6 - k * 3, 0, Math.PI * 2); ctx.fill();
+  }
+  // embers floating up everywhere
+  for (let i = 0; i < 28; i++) {
+    const ex = ((i * 97 - dist * 0.3) % W + W) % W;
+    const ey = H - ((t * 0.9 + i * 41) % H);
+    ctx.fillStyle = i % 3 ? "rgba(255,140,0,0.8)" : "rgba(255,220,100,0.8)";
+    ctx.fillRect(ex, ey, 3, 3);
+  }
+}
+
+function drawLavaPit(sx, w, t) {
+  ctx.fillStyle = "#120808";
+  ctx.fillRect(sx - 4, GROUND_Y, w + 8, H - GROUND_Y);
+  const g = ctx.createLinearGradient(0, GROUND_Y + 6, 0, H);
+  g.addColorStop(0, "#ffb703");
+  g.addColorStop(0.4, "#fb5607");
+  g.addColorStop(1, "#9d0208");
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(sx, H);
+  ctx.lineTo(sx, GROUND_Y + 10);
+  for (let x = sx; x <= sx + w; x += 8) ctx.lineTo(x, GROUND_Y + 8 + Math.sin(x * 0.08 + t * 0.12) * 3);
+  ctx.lineTo(sx + w, GROUND_Y + 10);
+  ctx.lineTo(sx + w, H);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = "rgba(255,235,140,0.85)";
+  for (let i = 0; i < w / 35; i++) {
+    const bx = sx + ((i * 53 + t * 0.7) % w);
+    ctx.beginPath(); ctx.arc(bx, GROUND_Y + 16 + ((i * 7) % 12), 1.5 + ((t + i * 13) % 20) / 10, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+function drawLavaPits() {
+  for (const pt of L.pits) {
+    const sx = pt.x - L.distance + PLAYER_X;
+    if (sx > W || sx + pt.w < 0) continue;
+    drawLavaPit(sx, pt.w, L.frame + (L.deathT || 0));
+  }
+}
+
+function drawRockLedge(x, y, w) {
+  ctx.fillStyle = "rgba(255,109,0,0.7)";
+  ctx.fillRect(x + 6, y + 13, w - 12, 4);
+  ctx.fillStyle = "#4a3b3b";
+  ctx.strokeStyle = "#1f1414";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x, y + 4);
+  ctx.lineTo(x + 9, y);
+  ctx.lineTo(x + w - 12, y);
+  ctx.lineTo(x + w, y + 5);
+  ctx.lineTo(x + w - 6, y + 15);
+  ctx.lineTo(x + 7, y + 16);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.strokeStyle = "rgba(255,120,0,0.75)";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(x + w * 0.3, y + 3); ctx.lineTo(x + w * 0.36, y + 9); ctx.lineTo(x + w * 0.32, y + 14);
+  ctx.moveTo(x + w * 0.7, y + 2); ctx.lineTo(x + w * 0.66, y + 10);
+  ctx.stroke();
+}
+
+function drawFireball(x, y, t) {
+  // fiery tail (it flies to the left, so the tail trails to the right)
+  for (let i = 3; i >= 1; i--) {
+    ctx.fillStyle = `rgba(255,${100 + i * 30},0,${0.25 / i + 0.1})`;
+    ctx.beginPath(); ctx.arc(x + i * 11, y + Math.sin(t * 0.5 + i) * 2, 12 - i * 2, 0, Math.PI * 2); ctx.fill();
+  }
+  const g = ctx.createRadialGradient(x, y, 2, x, y, 20);
+  g.addColorStop(0, "#fff3b0");
+  g.addColorStop(0.4, "#ffb703");
+  g.addColorStop(0.8, "#fb5607");
+  g.addColorStop(1, "rgba(251,86,7,0)");
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(x, y, 20, 0, Math.PI * 2); ctx.fill();
+}
+
 // Where to draw the alien: its real position, but always peeking in from the left edge
 function alienScreenX() {
   return Math.max(PLAYER_X - L.alienGap - 45, -35);
@@ -1840,6 +2066,19 @@ function drawBlender(x, groundY, t) {
 
 function drawDeath() {
   const t = L.deathT;
+  if (L.deathStyle === "lava") {
+    const sinkY = L.deadY + 25 + Math.min(t, 50) * 1.3;
+    drawBanana(L.deadX, sinkY, { face: "sad", angle: Math.sin(t * 0.3) * 0.2 });
+    drawLavaPits(); // lava covers the sinking banana
+    if (t > 25) {
+      for (let i = 0; i < 4; i++) {
+        const k = ((t - 25 + i * 12) % 50) / 50;
+        ctx.fillStyle = `rgba(90,90,90,${0.6 * (1 - k)})`;
+        ctx.beginPath(); ctx.arc(L.deadX + Math.sin(i + t * 0.05) * 12, GROUND_Y - k * 120, 10 + k * 18, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    return;
+  }
   if (L.deathStyle === "eaten") {
     const startX = alienScreenX();
     const ax = lerp(startX, PLAYER_X - 55, easeOut(Math.min(t / 22, 1)));
@@ -1992,12 +2231,17 @@ function drawHUD() {
 
 function drawRunWorld() {
   const toScreen = (wx) => wx - L.distance + PLAYER_X;
+  if (L.cfg.volcano) {
+    drawVolcanoBackdrop(L.distance, L.frame + L.cutT + (L.deathT || 0));
+    drawLavaPits();
+  }
   const portalX = toScreen(L.cfg.length) + 25;
   if (portalX < W + 100) drawPortal(portalX, L.frame + L.cutT);
 
   for (const pl of L.platforms) {
     const sx = toScreen(pl.x);
     if (sx > W || sx + pl.w < 0) continue;
+    if (pl.rock) { drawRockLedge(sx, pl.y, pl.w); continue; }
     const wb = boardWobble(pl);
     ctx.save();
     ctx.translate(sx + pl.w / 2 + wb.dx, pl.y + wb.dy);
@@ -2040,6 +2284,18 @@ function drawRunWorld() {
     const slipSpin = p.slip > 0 ? (40 - p.slip) * 0.3 : 0;
     drawBanana(PLAYER_X + ride.dx, p.y + ride.dy, { angle: angle + ride.rot + slipSpin, ducking: p.ducking, face, phase: L.frame * 0.35, air: !p.onGround }, flashing ? 0.35 : 1);
   }
+  for (const fb of L.fireballs) {
+    if (fb.hit) continue;
+    const sx = toScreen(fb.x);
+    const fy = fireballY(fb);
+    if (sx > W + 20 && sx < W + 320 && mode === "playing") {
+      // warning at the edge: a fireball is coming at this height
+      if (Math.floor(L.frame / 6) % 2) outlinedText("⚠️", W - 22, fy, 22, "#ffb703");
+    } else if (sx > -40 && sx <= W + 20) {
+      drawFireball(sx, fy, L.frame);
+    }
+  }
+
   if (L.cfg.alien && mode !== "dying" && mode !== "over") {
     if (mode === "cutscene") {
       // you made it: the alien gives up and runs away
@@ -2120,7 +2376,10 @@ function draw() {
     ctx.save();
     ctx.globalAlpha = L.frame < 90 ? 1 : 1 - (L.frame - 90) / 30;
     outlinedText(`Level ${L.n}`, W / 2, 170, 56, "#ffd93b");
-    if (L.cfg.alien) outlinedText("RUN! A fruit alien is chasing you!", W / 2, 218, 26, "#ff8fc0");
+    if (L.cfg.volcano) {
+      outlinedText("VOLCANO! Jump the lava and dodge the fireballs!", W / 2, 218, 26, "#ffb703");
+      if (L.cfg.alien) outlinedText("...and a fruit alien is chasing you!", W / 2, 252, 22, "#ff8fc0");
+    } else if (L.cfg.alien) outlinedText("RUN! A fruit alien is chasing you!", W / 2, 218, 26, "#ff8fc0");
     else outlinedText(`Reach the portal in ${L.cfg.timeLimit}s!`, W / 2, 218, 24);
     ctx.restore();
   }
